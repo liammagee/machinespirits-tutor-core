@@ -27,12 +27,16 @@ let rubricMtime = null;
 
 /**
  * Load the evaluation rubric configuration
+ *
+ * @param {boolean} [forceReload=false] - Bypass mtime cache
+ * @param {Object} [options]
+ * @param {string} [options.rubricPath] - Override path to rubric YAML file
  */
-export function loadRubric(forceReload = false) {
-  const rubricPath = path.join(CONFIG_DIR, 'evaluation-rubric.yaml');
+export function loadRubric(forceReload = false, { rubricPath: customPath } = {}) {
+  const effectivePath = customPath || path.join(CONFIG_DIR, 'evaluation-rubric.yaml');
 
   try {
-    const stats = fs.statSync(rubricPath);
+    const stats = fs.statSync(effectivePath);
     if (!forceReload && rubricCache && rubricMtime === stats.mtimeMs) {
       return rubricCache;
     }
@@ -43,7 +47,7 @@ export function loadRubric(forceReload = false) {
   }
 
   try {
-    const content = fs.readFileSync(rubricPath, 'utf-8');
+    const content = fs.readFileSync(effectivePath, 'utf-8');
     rubricCache = yaml.parse(content);
     return rubricCache;
   } catch (err) {
