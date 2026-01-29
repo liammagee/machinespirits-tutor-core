@@ -1,0 +1,285 @@
+/**
+ * Config Loader Base
+ *
+ * Shared configuration loading utilities used by tutorConfigLoader and learnerConfigLoader.
+ * Provides YAML loading with mtime-based caching, provider resolution, and prompt loading.
+ *
+ * This consolidates duplicate implementations from:
+ * - tutorConfigLoader.js
+ * - learnerConfigLoader.js
+ */
+
+import fs from 'fs';
+import path from 'path';
+import yaml from 'yaml';
+import { fileURLToPath } from 'url';
+
+// Resolve paths relative to this module
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const ROOT_DIR = path.resolve(__dirname, '..');
+const CONFIG_DIR = path.join(ROOT_DIR, 'config');
+const PROMPTS_DIR = path.join(ROOT_DIR, 'prompts');
+
+// Shared providers cache (since providers.yaml is used by both loaders)
+let sharedProvidersCache = null;
+let sharedProvidersMtime = null;
+
+/**
+ * Load providers from shared providers.yaml
+ * @param {boolean} forceReload - Force reload from disk
+ * @returns {Object} Providers configuration
+ */
+export function loadProviders(forceReload = false) {
+  const providersPath = path.join(CONFIG_DIR, 'providers.yaml');
+
+  try {
+    const stats = fs.statSync(providersPath);
+
+    if (!forceReload && sharedProvidersCache && sharedProvidersMtime === stats.mtimeMs) {
+      return sharedProvidersCache;
+    }
+
+    const content = fs.readFileSync(providersPath, 'utf-8');
+    const parsed = yaml.parse(content);
+    sharedProvidersCache = parsed?.providers || {};
+    sharedProvidersMtime = stats.mtimeMs;
+    return sharedProvidersCache;
+  } catch (err) {
+    console.warn('providers.yaml not found, using defaults');
+    return null;
+  }
+}
+
+/**
+ * Get provider configuration with environment variable resolution
+ * @param {Object} providers - Providers object from config
+ * @param {string} providerName - Provider name (anthropic, openai, openrouter, gemini, local)
+ * @returns {Object} Provider configuration with resolved API key
+ */
+export function resolveProviderConfig(providers, providerName) {
+  const provider = providers?.[providerName];
+
+  if (!provider) {
+    throw new Error(`Unknown provider: ${providerName}`);
+  }
+
+  // Resolve API key from environment (if required)
+  const apiKey = provider.api_key_env ? (process.env[provider.api_key_env] || '') : '';
+
+  // Local provider doesn't need an API key - just needs base_url
+  const isLocal = providerName === 'local';
+  const isConfigured = isLocal ? Boolean(provider.base_url) : Boolean(apiKey);
+
+  return {
+    ...provider,
+    apiKey,
+    isConfigured,
+  };
+}
+
+/**
+ * Create a config loader with caching for a specific YAML file
+ * @param {string} configFileName - Name of the config file (e.g., 'tutor-agents.yaml')
+ * @param {Function} getDefaultConfig - Function that returns default config if file not found
+ * @returns {Object} Loader utilities { loadConfig, getProviderConfig, clearCache }
+ */
+export function createConfigLoader(configFileName, getDefaultConfig) {
+  // Per-loader cache
+  let configCache = null;
+  let configMtime = null;
+  let providersMtime = null;
+
+  /**
+   * Load the configuration with mtime-based caching
+   * @param {boolean} forceReload - Force reload from disk
+   * @returns {Object} Configuration object
+   */
+  function loadConfig(forceReload = false) {
+    const configPath = path.join(CONFIG_DIR, configFileName);
+    const providersPath = path.join(CONFIG_DIR, 'providers.yaml');
+
+    // Check if files have changed
+    try {
+      const configStats = fs.statSync(configPath);
+      let providersStats = null;
+      try {
+        providersStats = fs.statSync(providersPath);
+      } catch (e) {
+        // providers.yaml is optional
+      }
+
+      const providersChanged = providersStats && providersMtime !== providersStats.mtimeMs;
+      const configChanged = configMtime !== configStats.mtimeMs;
+
+      if (!forceReload && configCache && !configChanged && !providersChanged) {
+        return configCache;
+      }
+
+      configMtime = configStats.mtimeMs;
+      if (providersStats) providersMtime = providersStats.mtimeMs;
+    } catch (err) {
+      console.warn(`Config file ${configFileName} not found, using defaults:`, err.message);
+      return getDefaultConfig();
+    }
+
+    try {
+      const content = fs.readFileSync(configPath, 'utf-8');
+      configCache = yaml.parse(content);
+
+      // Merge shared providers (providers.yaml takes precedence)
+      const sharedProviders = loadProviders(forceReload);
+      if (sharedProviders) {
+        configCache.providers = { ...configCache.providers, ...sharedProviders };
+      }
+
+      return configCache;
+    } catch (err) {
+      console.error(`Failed to parse ${configFileName}:`, err.message);
+      return getDefaultConfig();
+    }
+  }
+
+  /**
+   * Get provider configuration with environment variable resolution
+   * @param {string} providerName - Provider name
+   * @returns {Object} Provider configuration with resolved API key
+   */
+  function getProviderConfig(providerName) {
+    const config = loadConfig();
+    return resolveProviderConfig(config.providers, providerName);
+  }
+
+  /**
+   * Clear the config cache (for testing or forced refresh)
+   */
+  function clearCache() {
+    configCache = null;
+    configMtime = null;
+    providersMtime = null;
+  }
+
+  return {
+    loadConfig,
+    getProviderConfig,
+    clearCache,
+  };
+}
+
+/**
+ * Create a prompt loader with mtime-based caching
+ * @param {string} defaultPromptFn - Function that returns default prompt for a filename
+ * @returns {Object} Prompt loader utilities { loadPrompt, clearPromptCache, getPromptCacheStatus }
+ */
+export function createPromptLoader(defaultPromptFn = null) {
+  // Per-loader prompt cache
+  const promptCache = new Map();
+
+  /**
+   * Load a prompt file with mtime-based caching
+   * @param {string} filename - Prompt filename
+   * @param {boolean} forceReload - Force reload from disk
+   * @returns {string} Prompt content
+   */
+  function loadPrompt(filename, forceReload = false) {
+    const promptPath = path.join(PROMPTS_DIR, filename);
+
+    try {
+      if (!fs.existsSync(promptPath)) {
+        if (defaultPromptFn) {
+          return defaultPromptFn(filename);
+        }
+        return `Prompt file ${filename} not found.`;
+      }
+
+      const stats = fs.statSync(promptPath);
+      const cached = promptCache.get(filename);
+
+      // Return cached if not forced and mtime unchanged
+      if (!forceReload && cached && cached.mtime === stats.mtimeMs) {
+        return cached.content;
+      }
+
+      // Load fresh from disk
+      const rawContent = fs.readFileSync(promptPath, 'utf-8');
+      // Remove markdown title (first line starting with #)
+      const content = rawContent.replace(/^#[^\n]*\n+/, '').trim();
+
+      // Track if this was a change (for hot reload logging)
+      const wasChanged = cached && cached.mtime !== stats.mtimeMs;
+      promptCache.set(filename, { content, mtime: stats.mtimeMs });
+
+      if (wasChanged) {
+        console.log(`[Hot Reload] Prompt reloaded: ${filename}`);
+      }
+
+      return content;
+    } catch (err) {
+      console.warn(`Failed to load prompt ${filename}:`, err.message);
+      if (defaultPromptFn) {
+        return defaultPromptFn(filename);
+      }
+      return `Prompt file ${filename} not found.`;
+    }
+  }
+
+  /**
+   * Clear the prompt cache
+   */
+  function clearPromptCache() {
+    promptCache.clear();
+  }
+
+  /**
+   * Get prompt cache status for debugging
+   * @returns {Object} Cache status by filename
+   */
+  function getPromptCacheStatus() {
+    const status = {};
+    for (const [filename, { mtime }] of promptCache.entries()) {
+      const promptPath = path.join(PROMPTS_DIR, filename);
+      let currentMtime = null;
+      let needsReload = false;
+      try {
+        currentMtime = fs.statSync(promptPath).mtimeMs;
+        needsReload = currentMtime !== mtime;
+      } catch (e) {
+        // File may have been deleted
+      }
+      status[filename] = {
+        cachedMtime: new Date(mtime).toISOString(),
+        currentMtime: currentMtime ? new Date(currentMtime).toISOString() : null,
+        needsReload,
+      };
+    }
+    return status;
+  }
+
+  /**
+   * Get list of cached prompt filenames
+   * @returns {Array<string>} Cached filenames
+   */
+  function getCachedPrompts() {
+    return Array.from(promptCache.keys());
+  }
+
+  return {
+    loadPrompt,
+    clearPromptCache,
+    getPromptCacheStatus,
+    getCachedPrompts,
+  };
+}
+
+// Export path constants for loaders that need them
+export { CONFIG_DIR, PROMPTS_DIR, ROOT_DIR };
+
+export default {
+  loadProviders,
+  resolveProviderConfig,
+  createConfigLoader,
+  createPromptLoader,
+  CONFIG_DIR,
+  PROMPTS_DIR,
+  ROOT_DIR,
+};

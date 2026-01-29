@@ -1,0 +1,7 @@
+# Don't publish these directories
+data/
+logs/
+
+# Dev files
+*.log
+.DS_Store
