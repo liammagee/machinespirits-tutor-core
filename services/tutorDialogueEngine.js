@@ -1144,11 +1144,30 @@ async function callAI(agentConfig, prompt, agentRole = 'unknown', options = {}) 
  * This runs BEFORE Ego generates suggestions
  */
 async function superegoReinterpretSignals(learnerContext, options = {}) {
-  const { profileName = null, strategy = null } = options;
+  const { profileName = null, strategy = null, superegoModel = null } = options;
 
-  const superegoConfig = configLoader.getAgentConfig('superego', profileName, { strategy });
+  let superegoConfig = configLoader.getAgentConfig('superego', profileName, { strategy });
   if (!superegoConfig) {
     return null; // No superego configured, skip reinterpretation
+  }
+
+  // Apply superego model override if specified (for benchmarking)
+  if (superegoModel) {
+    const resolved = configLoader.resolveModel(superegoModel);
+    if (resolved && resolved.model) {
+      superegoConfig = {
+        ...superegoConfig,
+        provider: resolved.provider,
+        model: resolved.model,
+        providerConfig: {
+          ...superegoConfig.providerConfig,
+          apiKey: resolved.apiKey || superegoConfig.providerConfig?.apiKey,
+          base_url: resolved.baseUrl || superegoConfig.providerConfig?.base_url,
+          isConfigured: resolved.isConfigured ?? superegoConfig.providerConfig?.isConfigured,
+        },
+      };
+      console.log(`[Superego Reinterpret] Model override: ${JSON.stringify(superegoModel)} -> ${resolved.model}`);
+    }
   }
 
   // Check if reinterpret_signals is enabled in intervention_strategies
@@ -1215,6 +1234,7 @@ async function egoGenerateSuggestions(learnerContext, curriculumContext, simulat
     superegoReinterpretation = null,
     outputSize = 'normal',
     egoModel = null,
+    hyperparameters = null, // Override hyperparameters (e.g., max_tokens for reasoning models)
     // Recognition engine parameters (Phase 0-1)
     superegoCompliance = 0.7,
     recognitionSeeking = 0.6,
@@ -1233,6 +1253,11 @@ async function egoGenerateSuggestions(learnerContext, curriculumContext, simulat
     if (resolved && resolved.model) {
       egoConfig = { ...egoConfig, provider: resolved.provider, model: resolved.model };
     }
+  }
+
+  // Apply hyperparameters override if specified (e.g., max_tokens for reasoning models)
+  if (hyperparameters) {
+    egoConfig = { ...egoConfig, hyperparameters: { ...egoConfig.hyperparameters, ...hyperparameters } };
   }
 
   // Output size instructions for response length control
@@ -1280,16 +1305,20 @@ ${simulationsContext}
 
 ## Your Task
 
-Generate **1 suggestion** (focus on the single best action). The suggestion MUST:
-1. Reference a SPECIFIC lecture by its ID (e.g., "479-lecture-1", "480-lecture-2")
-2. Use the actionTarget field with the actual lecture ID from the curriculum above
-3. Have a title like "Start: [Lecture Title]" or "Continue: [Lecture Title]"
-4. Have a message explaining what the lecture covers
+Generate **1 suggestion** (focus on the single best action).
 
-${isNewUser ? 'This is a NEW USER - suggest their first lecture to start with.' : 'This is a RETURNING USER - suggest the next lecture they haven\'t completed.'}
+${isNewUser ? 'This is a NEW USER with no history — suggest their first lecture.' : `This is a RETURNING USER. Read the Learner Context above carefully before responding.
+Your suggestion MUST:
+1. Reference SPECIFIC data from the learner context (e.g., retry counts, struggle signals, time on page, completed lectures)
+2. Use an actionTarget that is an EXACT ID from the Available Curriculum above (e.g., "479-lecture-3", NOT made-up IDs)
+3. Follow the decision heuristics in your system prompt — if struggle signals are present, suggest REVIEW, not a new lecture
+4. Explain WHY this specific content addresses THIS learner's situation`}
 
-**DO NOT** generate vague advice like "take a break" or "reflect on your journey".
-**DO** suggest a specific lecture from the curriculum above.
+**CRITICAL CONSTRAINTS:**
+- actionTarget MUST be an ID that appears in the curriculum above. NEVER invent IDs like "101-lecture-1" or "learner-001"
+- NEVER suggest content from courses or topics not in the curriculum (no Python, no Data Science, no generic courses)
+- If the learner has struggle signals, your title should start with "Review:" or "Practice:", NOT "Start:" or "Continue:"
+- Your message must mention at least one specific detail from the learner context
 
 Respond with ONLY a JSON array containing exactly one suggestion object.`;
 
@@ -1298,14 +1327,16 @@ Respond with ONLY a JSON array containing exactly one suggestion object.`;
   // Extract JSON from response (handles markdown code blocks)
   let suggestions = extractJsonArray(response.text);
   if (!suggestions) {
-    // Retry once with a clearer prompt
-    console.warn('[Ego] No JSON array found, retrying with explicit format request...');
-    const retryPrompt = `Your previous response was not valid JSON. Please respond with ONLY a JSON array containing exactly one suggestion, no other text.
+    // Retry once — re-send original prompt with format reminder prepended.
+    // The original prompt contains all learner context and curriculum; sending
+    // a context-free retry causes hallucinated/generic suggestions.
+    console.warn('[Ego] No JSON array found, retrying with format reminder + full context...');
+    const retryPrompt = `IMPORTANT: Your previous response could not be parsed as JSON. This time, respond with ONLY a valid JSON array — no markdown fences, no explanation, no preamble.
 
 Example format:
-[{"type":"lecture","priority":"high","title":"Start: Lecture Name","message":"Description","actionTarget":"479-lecture-1","reasoning":"Why this suggestion"}]
+[{"type":"lecture","priority":"high","title":"Review: Topic","message":"Specific message referencing learner data","actionTarget":"479-lecture-3","reasoning":"Why this suggestion"}]
 
-Generate 1 suggestion for this learner based on their context.`;
+${prompt}`;
 
     const retryResponse = await callAI(egoConfig, retryPrompt, 'ego-retry');
     suggestions = extractJsonArray(retryResponse.text);
@@ -1513,17 +1544,52 @@ function getFallbackConfig(originalConfig) {
  * Superego reviews and critiques Ego's suggestions
  */
 async function superegoReview(egoSuggestions, learnerContext, options = {}) {
-  const { previousFeedback = null, profileName = null, strategy = null } = options;
+  const { previousFeedback = null, profileName = null, strategy = null, superegoModel = null } = options;
 
-  const superegoConfig = configLoader.getAgentConfig('superego', profileName, { strategy });
-  if (!superegoConfig) {
-    // No superego configured - auto-approve
+  let superegoConfig = configLoader.getAgentConfig('superego', profileName, { strategy });
+  if (!superegoConfig && !superegoModel) {
+    // No superego configured and no override - auto-approve
     return {
       approved: true,
       interventionType: 'none',
       feedback: 'No superego configured',
       metrics: null,
     };
+  }
+
+  // When profile has no superego but an override model is provided,
+  // bootstrap a config from the 'recognition' profile's superego as template.
+  if (!superegoConfig && superegoModel) {
+    superegoConfig = configLoader.getAgentConfig('superego', 'recognition', { strategy });
+    if (!superegoConfig) {
+      // No template available either - auto-approve
+      return {
+        approved: true,
+        interventionType: 'none',
+        feedback: 'No superego config template available',
+        metrics: null,
+      };
+    }
+    console.log(`[Superego Review] No superego in profile '${profileName}', bootstrapped from 'recognition' template`);
+  }
+
+  // Apply superego model override if specified (for benchmarking)
+  if (superegoModel) {
+    const resolved = configLoader.resolveModel(superegoModel);
+    if (resolved && resolved.model) {
+      superegoConfig = {
+        ...superegoConfig,
+        provider: resolved.provider,
+        model: resolved.model,
+        providerConfig: {
+          ...superegoConfig.providerConfig,
+          apiKey: resolved.apiKey || superegoConfig.providerConfig?.apiKey,
+          base_url: resolved.baseUrl || superegoConfig.providerConfig?.base_url,
+          isConfigured: resolved.isConfigured ?? superegoConfig.providerConfig?.isConfigured,
+        },
+      };
+      console.log(`[Superego Review] Model override: ${JSON.stringify(superegoModel)} -> ${resolved.model}`);
+    }
   }
 
   const feedbackContext = previousFeedback
@@ -1726,6 +1792,8 @@ export async function runDialogue(context, options = {}) {
     trace = isTranscriptMode() || isExpandMode(),
     profileName = null,
     egoModel = null, // Override ego model for benchmarking (e.g., "openrouter.haiku")
+    superegoModel = null, // Override superego model for benchmarking
+    hyperparameters = null, // Override hyperparameters (e.g., max_tokens for reasoning models)
     superegoStrategy = null, // Superego intervention strategy (e.g., 'socratic_challenge')
     outputSize = 'normal', // compact, normal, expanded - affects response verbosity
     // Recognition engine parameters (Phase 0-1)
@@ -1765,6 +1833,11 @@ export async function runDialogue(context, options = {}) {
       egoConfig = { ...egoConfig, provider: resolved.provider, model: resolved.model };
       console.log(`[Dialogue] Ego model override: ${egoModel} -> ${resolved.model}`);
     }
+  }
+
+  // Apply hyperparameters override if specified (e.g., max_tokens for reasoning models)
+  if (hyperparameters && egoConfig) {
+    egoConfig = { ...egoConfig, hyperparameters: { ...egoConfig.hyperparameters, ...hyperparameters } };
   }
 
   monitoringService.startSession(dialogueId, {
@@ -1867,7 +1940,7 @@ export async function runDialogue(context, options = {}) {
 
   if (!skipPreAnalysis) {
     try {
-      const reinterpResult = await superegoReinterpretSignals(learnerContext, { profileName, strategy: superegoStrategy });
+      const reinterpResult = await superegoReinterpretSignals(learnerContext, { profileName, strategy: superegoStrategy, superegoModel });
       if (reinterpResult?.reinterpretation) {
         superegoReinterpretation = reinterpResult.reinterpretation;
 
@@ -1941,6 +2014,7 @@ export async function runDialogue(context, options = {}) {
       superegoReinterpretation,
       outputSize,
       egoModel,
+      hyperparameters,
       // Pass recognition parameters
       superegoCompliance,
       recognitionSeeking,
@@ -2046,7 +2120,7 @@ export async function runDialogue(context, options = {}) {
     const superegoResult = await superegoReview(
       currentSuggestions,
       learnerContext,
-      { previousFeedback, profileName, strategy: superegoStrategy }
+      { previousFeedback, profileName, strategy: superegoStrategy, superegoModel }
     );
 
     if (superegoResult.metrics) {
@@ -2321,6 +2395,7 @@ export async function quickGenerate(context, options = {}) {
     {
       isNewUser,
       profileName,
+      hyperparameters,
       // Recognition parameters (use defaults if not specified)
       superegoCompliance: options.superegoCompliance,
       recognitionSeeking: options.recognitionSeeking,

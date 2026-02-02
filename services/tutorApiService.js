@@ -81,6 +81,7 @@ export async function generateSuggestions(context, config = {}) {
     provider = null,
     model = null,
     egoModel = null, // Override ego model for benchmarking (e.g., "openrouter.haiku")
+    superegoModel = null, // Override superego model for benchmarking
     hyperparameters = {},
     promptId = 'default',
     profileName = null,
@@ -122,6 +123,8 @@ export async function generateSuggestions(context, config = {}) {
         isNewUser: context.isNewUser ?? false,
         profileName: effectiveProfileName,
         egoModel, // Override ego model for benchmarking
+        superegoModel, // Override superego model for benchmarking
+        hyperparameters, // Override hyperparameters (e.g., max_tokens for reasoning models)
         maxRounds: effectiveMaxRounds,
         superegoStrategy, // Pass through superego intervention strategy
         outputSize, // compact, normal, expanded - affects response verbosity
