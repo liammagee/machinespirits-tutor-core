@@ -1776,6 +1776,20 @@ function logDialogue(dialogueId, data) {
   }
 }
 
+function suggestionSimilarity(sugA, sugB) {
+  const strA = JSON.stringify(sugA);
+  const strB = JSON.stringify(sugB);
+  if (strA === strB) return 1.0;
+  if (!strA.length || !strB.length) return 0.0;
+  const minLen = Math.min(strA.length, strB.length);
+  const maxLen = Math.max(strA.length, strB.length);
+  let matches = 0;
+  for (let i = 0; i < minLen; i++) {
+    if (strA[i] === strB[i]) matches++;
+  }
+  return matches / maxLen;
+}
+
 /**
  * Run the full Ego-Superego dialogue to generate modulated suggestions
  *
@@ -1813,6 +1827,7 @@ export async function runDialogue(context, options = {}) {
 
   const dialogueConfig = configLoader.getDialogueConfig(profileName);
   const effectiveMaxRounds = maxRounds ?? dialogueConfig.max_rounds ?? 2;
+  const convergenceThreshold = dialogueConfig.convergence_threshold ?? 0.85;
 
   // Use provided dialogue ID for multi-turn continuity, or create new one
   const dialogueId = _dialogueId || `dialogue-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -2065,7 +2080,26 @@ export async function runDialogue(context, options = {}) {
     response: egoInitial.rawResponse,
   });
 
-  // If Ego failed to generate anything, return early
+  // Retry once for dialogue-enabled profiles before returning 0-round failure
+  if (currentSuggestions.length === 0 && hasSuperego) {
+    console.log(`[Dialogue] Ego initial generation empty for dialogue profile, retrying...`);
+    const egoRetry = await egoGenerateSuggestions(
+      learnerContext, curriculumContext, simulationsContext,
+      { isNewUser, profileName, superegoReinterpretation, outputSize, egoModel, hyperparameters,
+        superegoCompliance, recognitionSeeking, learnerId, dialecticalNegotiation }
+    );
+    currentSuggestions = egoRetry.suggestions || [];
+    // Accumulate retry metrics
+    if (egoRetry.metrics) {
+      metrics.totalInputTokens += egoRetry.metrics.inputTokens || 0;
+      metrics.totalOutputTokens += egoRetry.metrics.outputTokens || 0;
+      metrics.totalCost += egoRetry.metrics.cost || 0;
+      if (egoRetry.metrics.generationId) metrics.generationIds.push(egoRetry.metrics.generationId);
+      metrics.apiCalls++;
+    }
+  }
+
+  // If Ego failed to generate anything, return early (fires only if retry also failed)
   if (currentSuggestions.length === 0) {
     // End monitoring session with error
     monitoringService.recordEvent(dialogueId, {
@@ -2266,6 +2300,7 @@ export async function runDialogue(context, options = {}) {
 
     // Ego revises based on feedback
     previousFeedback = superegoResult.feedback;
+    const previousSuggestions = currentSuggestions.map(s => ({ ...s }));
     const egoRevision = await egoRevise(
       currentSuggestions,
       superegoResult,
@@ -2274,6 +2309,29 @@ export async function runDialogue(context, options = {}) {
       { profileName, egoModel }
     );
     currentSuggestions = egoRevision.suggestions;
+
+    // Convergence threshold: if ego's revision is too similar to previous,
+    // further rounds won't help — converge early
+    const similarity = suggestionSimilarity(previousSuggestions, currentSuggestions);
+    if (similarity >= convergenceThreshold) {
+      console.log(`[Dialogue] Round ${round}: similarity ${(similarity * 100).toFixed(0)}% >= threshold ${(convergenceThreshold * 100).toFixed(0)}%, converging`);
+      metrics.totalLatencyMs = Date.now() - startTime;
+      monitoringService.endSession(dialogueId);
+      const result = {
+        suggestions: currentSuggestions,
+        dialogueTrace,
+        converged: true,
+        convergenceReason: 'threshold',
+        convergenceSimilarity: similarity,
+        rounds: round,
+        metrics,
+        dialogueId,
+        profileName: profileName || configLoader.getActiveProfile().name,
+        learnerContext: trace ? learnerContext : undefined,
+      };
+      if (!_skipLogging) logDialogue(dialogueId, result);
+      return result;
+    }
 
     if (egoRevision.metrics) {
       metrics.totalLatencyMs += egoRevision.metrics.latencyMs || 0;
