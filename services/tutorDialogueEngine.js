@@ -1610,11 +1610,15 @@ ${JSON.stringify(egoSuggestions, null, 2)}
 
 ## Your Task
 
-Review these suggestions. Consider:
-1. Are they specific enough? (naming exact lectures/content)
-2. Are they appropriate for this learner's current state?
-3. Is the pacing right? (not too much, not too little)
-4. Is the tone helpful without being condescending?
+Review these suggestions critically. Your default is to REJECT unless convinced otherwise.
+
+Check each criterion — if ANY fails, set approved: false:
+1. SPECIFICITY: Does the suggestion cite exact lecture IDs, activity IDs, or quiz references from the learner context? Vague references like "revisit the material" = reject.
+2. EVIDENCE: Does the reasoning reference concrete learner signals (struggle count, retry count, scroll depth, session data)? Generic reasoning = reject.
+3. APPROPRIATENESS: Does the action type match the learner's state? (Struggling → review/practice, NOT advance. Progressing → challenge, NOT repetition.)
+4. TONE: Is the message calibrated to the learner's emotional state? (Frustrated → empathetic. Engaged → challenging.)
+
+If the suggestion is good but could be improved, set approved: false with interventionType: "revise" and specific feedback. Only set approved: true when you cannot identify a concrete improvement.
 
 Respond with ONLY a JSON object in the format specified.`;
 
