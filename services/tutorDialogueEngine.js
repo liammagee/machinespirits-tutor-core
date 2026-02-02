@@ -75,6 +75,67 @@ function getAgentTarget(fromAgent, hasSuperego) {
   return 'user'; // fallback
 }
 
+/**
+ * Strip bulky fields from metrics before storing in dialogue trace.
+ * Keeps token counts, latency, cost, model info — drops the raw LLM
+ * response text and verbose generationDetails to avoid 3x duplication.
+ */
+function trimMetricsForTrace(metrics) {
+  if (!metrics) return null;
+  const { text, generationDetails, ...trimmed } = metrics;
+  return trimmed;
+}
+
+/**
+ * Extract just the structured context summary from the full learner context.
+ * Returns the <structured_context_summary> block plus the warning header and
+ * any learner chat messages — the minimal context needed for superego review
+ * and ego revision rounds.
+ *
+ * Returns null if no structured summary is found (caller should fall back
+ * to full context).
+ */
+function extractStructuredSummary(learnerContext) {
+  if (!learnerContext || typeof learnerContext !== 'string') return null;
+
+  const summaryMatch = learnerContext.match(
+    /(⚠️[^\n]*\n)?<structured_context_summary>[\s\S]*?<\/structured_context_summary>\n?[^\n]*/
+  );
+  if (!summaryMatch) return null;
+
+  const parts = [summaryMatch[0]];
+
+  // Preserve learner chat messages — needed for tone/emotional calibration
+  const chatSection = learnerContext.match(/### Recent Chat History\n([\s\S]*?)(?=\n###|\n$|$)/);
+  if (chatSection) {
+    parts.push('\n### Recent Chat History');
+    parts.push(chatSection[1].trim());
+  }
+
+  // Preserve conversation history if present (multi-turn)
+  const convSection = learnerContext.match(/### Conversation History\n([\s\S]*?)(?=\n###|\n$|$)/);
+  if (convSection) {
+    parts.push('\n### Conversation History');
+    parts.push(convSection[1].trim());
+  }
+
+  // Preserve learner action if present
+  const actionSection = learnerContext.match(/### Learner Action\n([\s\S]*?)(?=\n###|\n$|$)/);
+  if (actionSection) {
+    parts.push('\n### Learner Action');
+    parts.push(actionSection[1].trim());
+  }
+
+  // Preserve learner response if present
+  const responseSection = learnerContext.match(/### Learner Response\n([\s\S]*?)(?=\n###|\n$|$)/);
+  if (responseSection) {
+    parts.push('\n### Learner Response');
+    parts.push(responseSection[1].trim());
+  }
+
+  return parts.join('\n');
+}
+
 // Current dialogue ID for logging context
 let currentDialogueId = null;
 
@@ -1596,11 +1657,16 @@ async function superegoReview(egoSuggestions, learnerContext, options = {}) {
     ? `\n## Previous Feedback (from last round)\n${previousFeedback}\n`
     : '';
 
+  // The superego checks specificity, evidence, appropriateness, and tone against
+  // learner signals — the structured summary contains all the key data points.
+  // Full raw context (event timelines, markdown profile) is unnecessary for review.
+  const reviewContext = extractStructuredSummary(learnerContext) || learnerContext;
+
   const prompt = `${superegoConfig.prompt}
 
 ## Learner Context
 
-${learnerContext}
+${reviewContext}
 ${feedbackContext}
 ## Ego's Suggestions to Review
 
@@ -1679,6 +1745,12 @@ async function egoRevise(originalSuggestions, superegoFeedback, learnerContext, 
     }
   }
 
+  // On revision rounds, send condensed context: the ego already generated from
+  // the full learner context + curriculum on round 0. For revision it only needs
+  // the superego feedback, its own suggestions, and the learner signals for grounding.
+  // Curriculum is omitted — the ego already chose an actionTarget.
+  const condensedLearnerContext = extractStructuredSummary(learnerContext) || learnerContext;
+
   const prompt = `${egoConfig.prompt}
 
 ## Internal Feedback (from quality review)
@@ -1701,11 +1773,7 @@ ${JSON.stringify(originalSuggestions, null, 2)}
 
 ## Learner Context
 
-${learnerContext}
-
-## Available Curriculum
-
-${curriculumContext}
+${condensedLearnerContext}
 
 ## Your Task
 
@@ -1992,7 +2060,7 @@ export async function runDialogue(context, options = {}) {
             output: superegoReinterpretation,
             latencyMs: reinterpResult.metrics?.latencyMs,
             provider: reinterpResult.metrics?.provider || 'unknown',
-            metrics: reinterpResult.metrics,
+            metrics: trimMetricsForTrace(reinterpResult.metrics),
           });
         }
 
@@ -2069,11 +2137,10 @@ export async function runDialogue(context, options = {}) {
       direction: 'request',
       from: 'ego',
       to: getAgentTarget('ego', hasSuperego),
-      output: currentSuggestions,
       suggestions: currentSuggestions,
       latencyMs: egoInitial.metrics?.latencyMs,
       provider: egoInitial.metrics?.provider || 'unknown',
-      metrics: egoInitial.metrics,
+      metrics: trimMetricsForTrace(egoInitial.metrics),
     });
   }
 
@@ -2199,7 +2266,7 @@ export async function runDialogue(context, options = {}) {
         feedback: superegoResult.feedback,
         latencyMs: superegoResult.metrics?.latencyMs,
         provider: superegoResult.metrics?.provider || 'unknown',
-        metrics: superegoResult.metrics,
+        metrics: trimMetricsForTrace(superegoResult.metrics),
       });
     }
 
@@ -2261,11 +2328,10 @@ export async function runDialogue(context, options = {}) {
           direction: 'response',
           from: 'ego',
           to: 'user',
-          output: currentSuggestions,
           suggestions: currentSuggestions,
           latencyMs: egoRevision.metrics?.latencyMs,
           provider: egoRevision.metrics?.provider || 'unknown',
-          metrics: egoRevision.metrics,
+          metrics: trimMetricsForTrace(egoRevision.metrics),
           note: 'Ego incorporated superego suggestions before final output',
         });
       }
@@ -2363,11 +2429,10 @@ export async function runDialogue(context, options = {}) {
         direction: 'request',
         from: 'ego',
         to: getAgentTarget('ego', hasSuperego),
-        output: currentSuggestions,
         suggestions: currentSuggestions,
         latencyMs: egoRevision.metrics?.latencyMs,
         provider: egoRevision.metrics?.provider || 'unknown',
-        metrics: egoRevision.metrics,
+        metrics: trimMetricsForTrace(egoRevision.metrics),
       });
     }
 
