@@ -40,10 +40,11 @@ export function resolveModel(ref, getProviderConfig) {
   let providerName, modelAlias;
 
   if (typeof ref === 'string') {
-    // Parse "provider.model" format
-    const parts = ref.split('.');
-    if (parts.length === 2) {
-      [providerName, modelAlias] = parts;
+    // Parse "provider.model" format - split on first dot only to support model aliases with dots (e.g., "kimi-k2.5")
+    const dotIndex = ref.indexOf('.');
+    if (dotIndex > 0 && dotIndex < ref.length - 1) {
+      providerName = ref.slice(0, dotIndex);
+      modelAlias = ref.slice(dotIndex + 1);
     } else {
       throw new Error(
         `Invalid model reference: "${ref}". Use format "provider.model" (e.g., "openrouter.haiku", "anthropic.sonnet")`
@@ -107,14 +108,16 @@ export function validateModelRef(ref) {
     let providerName, modelAlias;
 
     if (typeof ref === 'string') {
-      const parts = ref.split('.');
-      if (parts.length !== 2) {
+      // Split on first dot only to support model aliases with dots (e.g., "kimi-k2.5")
+      const dotIndex = ref.indexOf('.');
+      if (dotIndex <= 0 || dotIndex >= ref.length - 1) {
         return {
           valid: false,
           error: `Invalid format. Expected "provider.model", got "${ref}"`,
         };
       }
-      [providerName, modelAlias] = parts;
+      providerName = ref.slice(0, dotIndex);
+      modelAlias = ref.slice(dotIndex + 1);
     } else if (typeof ref === 'object' && ref !== null) {
       providerName = ref.provider;
       modelAlias = ref.model;
