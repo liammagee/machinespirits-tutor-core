@@ -1421,7 +1421,7 @@ ${userPrompt}`;
 
     if (!suggestions) {
       console.warn('[Ego] Retry also failed. Raw response:', retryResponse.text.slice(0, 300));
-      return { suggestions: [], rawPrompt: prompt, rawResponse: response.text, metrics: response };
+      return { suggestions: [], rawPrompt: userPrompt, rawResponse: response.text, metrics: response };
     }
   }
 
@@ -1529,7 +1529,7 @@ ${userPrompt}`;
     }
   }
 
-  return { suggestions, rawPrompt: prompt, rawResponse: response.text, metrics: response };
+  return { suggestions, rawPrompt: userPrompt, rawResponse: response.text, metrics: response };
 }
 
 /**
