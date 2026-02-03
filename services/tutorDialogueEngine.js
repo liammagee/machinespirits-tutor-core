@@ -965,13 +965,18 @@ function extractJsonObject(text) {
 }
 
 /**
- * Make an AI API call with the specified provider and configuration
+ * Make an AI API call with the specified provider and configuration.
+ * Accepts system and user prompts separately so providers can cache the
+ * static system prefix (Anthropic uses a top-level `system` field;
+ * OpenAI/OpenRouter/local use a `{ role: 'system' }` message).
+ *
  * @param {object} agentConfig - Agent configuration
- * @param {string} prompt - Prompt to send
+ * @param {string} systemPrompt - Static system/persona prompt (cacheable)
+ * @param {string} userPrompt - Dynamic per-call user content
  * @param {string} agentRole - Agent role for logging (e.g., 'ego', 'superego-reinterpret')
  * @param {object} options - Optional: from/to/direction overrides for logging
  */
-async function callAI(agentConfig, prompt, agentRole = 'unknown', options = {}) {
+async function callAI(agentConfig, systemPrompt, userPrompt, agentRole = 'unknown', options = {}) {
   const { provider, providerConfig, model, hyperparameters } = agentConfig;
   const { temperature = 0.5, max_tokens = 1500, top_p } = hyperparameters;
 
@@ -981,13 +986,18 @@ async function callAI(agentConfig, prompt, agentRole = 'unknown', options = {}) 
 
   const startTime = Date.now();
 
+  // Combine for logging (preserves existing log format)
+  const prompt = `${systemPrompt}\n\n${userPrompt}`;
+
   if (provider === 'anthropic') {
-    // Anthropic doesn't allow both temperature and top_p - only include top_p if explicitly set
+    // Anthropic uses a top-level `system` field (not a message role) which
+    // enables automatic prompt caching of the static prefix.
     const bodyParams = {
       model,
       max_tokens,
       temperature,
-      messages: [{ role: 'user', content: prompt }],
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userPrompt }],
     };
     // Only add top_p if explicitly provided (and then omit temperature per Anthropic rules)
     if (top_p !== undefined) {
@@ -1037,7 +1047,10 @@ async function callAI(agentConfig, prompt, agentRole = 'unknown', options = {}) 
         temperature,
         max_tokens,
         top_p,
-        messages: [{ role: 'user', content: prompt }],
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
       }),
     });
 
@@ -1075,7 +1088,10 @@ async function callAI(agentConfig, prompt, agentRole = 'unknown', options = {}) 
         temperature,
         max_tokens,
         top_p,
-        messages: [{ role: 'user', content: prompt }],
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
       }),
     });
 
@@ -1144,7 +1160,8 @@ async function callAI(agentConfig, prompt, agentRole = 'unknown', options = {}) 
 
     const result = await gemini.models.generateContent({
       model,
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      systemInstruction: systemPrompt,
+      contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
       config: { temperature, maxOutputTokens: max_tokens, topP: top_p },
     });
 
@@ -1172,7 +1189,10 @@ async function callAI(agentConfig, prompt, agentRole = 'unknown', options = {}) 
         model,
         temperature,
         max_tokens,
-        messages: [{ role: 'user', content: prompt }],
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
       }),
     });
 
@@ -1238,9 +1258,7 @@ async function superegoReinterpretSignals(learnerContext, options = {}) {
     return null;
   }
 
-  const prompt = `${superegoConfig.prompt}
-
-## Learner Behavior Signals
+  const userPrompt = `## Learner Behavior Signals
 
 The following learner context has been observed:
 
@@ -1271,7 +1289,7 @@ Format your response as:
 Be specific and incisive. The Ego needs to hear the harder truth.`;
 
   try {
-    const response = await callAI(superegoConfig, prompt, 'superego-reinterpret');
+    const response = await callAI(superegoConfig, superegoConfig.prompt, userPrompt, 'superego-reinterpret');
     const parsed = extractJsonObject(response.text);
 
     if (parsed) {
@@ -1348,8 +1366,7 @@ You don't have to accept all of this, but engage with it honestly.
 
 ` : '';
 
-  const prompt = `${egoConfig.prompt}
-${reinterpretationContext}
+  const userPrompt = `${reinterpretationContext}
 ${outputSizeInstructions[outputSize] || ''}
 
 ## Current Learner Context
@@ -1383,7 +1400,7 @@ Your suggestion MUST:
 
 Respond with ONLY a JSON array containing exactly one suggestion object.`;
 
-  const response = await callAI(egoConfig, prompt, 'ego');
+  const response = await callAI(egoConfig, egoConfig.prompt, userPrompt, 'ego');
 
   // Extract JSON from response (handles markdown code blocks)
   let suggestions = extractJsonArray(response.text);
@@ -1392,14 +1409,14 @@ Respond with ONLY a JSON array containing exactly one suggestion object.`;
     // The original prompt contains all learner context and curriculum; sending
     // a context-free retry causes hallucinated/generic suggestions.
     console.warn('[Ego] No JSON array found, retrying with format reminder + full context...');
-    const retryPrompt = `IMPORTANT: Your previous response could not be parsed as JSON. This time, respond with ONLY a valid JSON array — no markdown fences, no explanation, no preamble.
+    const retryUserPrompt = `IMPORTANT: Your previous response could not be parsed as JSON. This time, respond with ONLY a valid JSON array — no markdown fences, no explanation, no preamble.
 
 Example format:
 [{"type":"lecture","priority":"high","title":"Review: Topic","message":"Specific message referencing learner data","actionTarget":"479-lecture-3","reasoning":"Why this suggestion"}]
 
-${prompt}`;
+${userPrompt}`;
 
-    const retryResponse = await callAI(egoConfig, retryPrompt, 'ego-retry');
+    const retryResponse = await callAI(egoConfig, egoConfig.prompt, retryUserPrompt, 'ego-retry');
     suggestions = extractJsonArray(retryResponse.text);
 
     if (!suggestions) {
@@ -1662,9 +1679,7 @@ async function superegoReview(egoSuggestions, learnerContext, options = {}) {
   // Full raw context (event timelines, markdown profile) is unnecessary for review.
   const reviewContext = extractStructuredSummary(learnerContext) || learnerContext;
 
-  const prompt = `${superegoConfig.prompt}
-
-## Learner Context
+  const userPrompt = `## Learner Context
 
 ${reviewContext}
 ${feedbackContext}
@@ -1688,7 +1703,7 @@ If the suggestion is good but could be improved, set approved: false with interv
 
 Respond with ONLY a JSON object in the format specified.`;
 
-  const response = await callAI(superegoConfig, prompt, 'superego');
+  const response = await callAI(superegoConfig, superegoConfig.prompt, userPrompt, 'superego');
 
   // Create fallback retry function
   const fallbackConfig = getFallbackConfig(superegoConfig);
@@ -1696,7 +1711,7 @@ Respond with ONLY a JSON object in the format specified.`;
     if (!isTranscriptMode()) {
       console.log(`[Superego] Falling back from ${superegoConfig.modelName || 'haiku'} to ${fallbackConfig.modelName || 'sonnet'}`);
     }
-    return callAI(fallbackConfig, prompt, 'superego-fallback');
+    return callAI(fallbackConfig, superegoConfig.prompt, userPrompt, 'superego-fallback');
   } : null;
 
   // Parse with fallback
@@ -1751,9 +1766,7 @@ async function egoRevise(originalSuggestions, superegoFeedback, learnerContext, 
   // Curriculum is omitted — the ego already chose an actionTarget.
   const condensedLearnerContext = extractStructuredSummary(learnerContext) || learnerContext;
 
-  const prompt = `${egoConfig.prompt}
-
-## Internal Feedback (from quality review)
+  const userPrompt = `## Internal Feedback (from quality review)
 
 The quality reviewer provided this feedback:
 - Intervention type: ${superegoFeedback.interventionType}
@@ -1790,7 +1803,7 @@ Respond with ONLY a JSON array of revised suggestions.`;
     callOptions.direction = direction || 'request';
   }
 
-  const response = await callAI(egoConfig, prompt, 'ego-revise', callOptions);
+  const response = await callAI(egoConfig, egoConfig.prompt, userPrompt, 'ego-revise', callOptions);
 
   // Extract JSON from response (handles markdown code blocks)
   const suggestions = extractJsonArray(response.text);
