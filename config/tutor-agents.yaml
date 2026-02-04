@@ -483,6 +483,42 @@ profiles:
       rapid_nav_window_ms: 30000
       retry_frustration_count: 3
 
+  # Enhanced: Improved prompts without recognition theory
+  # Use this to isolate prompt engineering effects from recognition theory effects
+  enhanced:
+    description: "Enhanced prompts - better structure/examples but no recognition theory"
+    recognition_mode: false  # No recognition theory
+    memory_enabled: false    # No Writing Pad integration
+    dialogue:
+      enabled: true
+      max_rounds: 2
+      convergence_threshold: 0.8
+
+    ego:
+      provider: openrouter
+      model: nemotron
+      staging: front
+      prompt_file: tutor-ego-enhanced.md  # Enhanced prompts (no recognition theory)
+      hyperparameters:
+        temperature: 0.6
+        max_tokens: 3500
+
+    superego:
+      provider: openrouter
+      model: nemotron
+      staging: back
+      prompt_file: tutor-superego-enhanced.md  # Enhanced prompts (no recognition theory)
+      hyperparameters:
+        temperature: 0.4
+        max_tokens: 3500
+
+    intervention_thresholds:
+      low_intensity_skip_dialogue: false
+      high_intensity_extra_rounds: true
+      struggle_signal_threshold: 2
+      rapid_nav_window_ms: 30000
+      retry_frustration_count: 3
+
   # Recognition: Phase 4 mode - full memory persistence, recognition-enhanced prompts
   # Use this as the treatment group for recognition evaluation
   recognition:
@@ -636,6 +672,33 @@ profiles:
       provider: openrouter
       model: nemotron
       prompt_file: tutor-ego.md  # Standard prompts
+      hyperparameters:
+        temperature: 0.6
+        max_tokens: 3500
+
+    superego: null  # No Superego
+
+    intervention_thresholds:
+      low_intensity_skip_dialogue: true
+      high_intensity_extra_rounds: false
+      struggle_signal_threshold: 2
+      rapid_nav_window_ms: 30000
+      retry_frustration_count: 3
+
+  # Single Agent + Enhanced Prompts
+  # No Superego review, enhanced Ego prompts (no recognition theory)
+  single_enhanced:
+    description: "Single agent with enhanced prompts - isolates prompt engineering without recognition theory"
+    recognition_mode: false
+    memory_enabled: false
+    dialogue:
+      enabled: false  # No Superego dialogue
+      max_rounds: 0
+
+    ego:
+      provider: openrouter
+      model: nemotron
+      prompt_file: tutor-ego-enhanced.md  # Enhanced prompts (no recognition theory)
       hyperparameters:
         temperature: 0.6
         max_tokens: 3500
