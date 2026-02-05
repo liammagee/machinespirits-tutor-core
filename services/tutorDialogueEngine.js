@@ -1314,6 +1314,7 @@ async function egoGenerateSuggestions(learnerContext, curriculumContext, simulat
     outputSize = 'normal',
     egoModel = null,
     hyperparameters = null, // Override hyperparameters (e.g., max_tokens for reasoning models)
+    systemPromptExtension = null, // Dynamic directives prepended to ego system prompt (prompt rewriting)
     // Recognition engine parameters (Phase 0-1)
     superegoCompliance = 0.7,
     recognitionSeeking = 0.6,
@@ -1400,7 +1401,12 @@ Your suggestion MUST:
 
 Respond with ONLY a JSON array containing exactly one suggestion object.`;
 
-  const response = await callAI(egoConfig, egoConfig.prompt, userPrompt, 'ego');
+  // Prepend dynamic session evolution directives to system prompt if provided
+  const effectiveSystemPrompt = systemPromptExtension
+    ? `${systemPromptExtension}\n\n${egoConfig.prompt}`
+    : egoConfig.prompt;
+
+  const response = await callAI(egoConfig, effectiveSystemPrompt, userPrompt, 'ego');
 
   // Extract JSON from response (handles markdown code blocks)
   let suggestions = extractJsonArray(response.text);
@@ -1745,7 +1751,7 @@ Respond with ONLY a JSON object in the format specified.`;
  * Ego revises suggestions based on Superego feedback
  */
 async function egoRevise(originalSuggestions, superegoFeedback, learnerContext, curriculumContext, options = {}) {
-  const { profileName = null, from = null, to = null, direction = null, egoModel = null } = options;
+  const { profileName = null, from = null, to = null, direction = null, egoModel = null, systemPromptExtension = null } = options;
 
   let egoConfig = configLoader.getAgentConfig('ego', profileName);
   if (!egoConfig) {
@@ -1803,7 +1809,12 @@ Respond with ONLY a JSON array of revised suggestions.`;
     callOptions.direction = direction || 'request';
   }
 
-  const response = await callAI(egoConfig, egoConfig.prompt, userPrompt, 'ego-revise', callOptions);
+  // Prepend dynamic session evolution directives to system prompt if provided
+  const effectiveSystemPrompt = systemPromptExtension
+    ? `${systemPromptExtension}\n\n${egoConfig.prompt}`
+    : egoConfig.prompt;
+
+  const response = await callAI(egoConfig, effectiveSystemPrompt, userPrompt, 'ego-revise', callOptions);
 
   // Extract JSON from response (handles markdown code blocks)
   const suggestions = extractJsonArray(response.text);
@@ -1895,6 +1906,7 @@ export async function runDialogue(context, options = {}) {
     hyperparameters = null, // Override hyperparameters (e.g., max_tokens for reasoning models)
     superegoStrategy = null, // Superego intervention strategy (e.g., 'socratic_challenge')
     outputSize = 'normal', // compact, normal, expanded - affects response verbosity
+    systemPromptExtension = null, // Dynamic directives prepended to ego system prompt (prompt rewriting)
     // Recognition engine parameters (Phase 0-1)
     superegoCompliance = 0.7, // How much ego obeys the ghost (0.0-1.0)
     recognitionSeeking = 0.6,  // How much ego seeks recognition from learner (0.0-1.0)
@@ -2115,6 +2127,7 @@ export async function runDialogue(context, options = {}) {
       outputSize,
       egoModel,
       hyperparameters,
+      systemPromptExtension,
       // Pass recognition parameters
       superegoCompliance,
       recognitionSeeking,
@@ -2170,7 +2183,7 @@ export async function runDialogue(context, options = {}) {
     const egoRetry = await egoGenerateSuggestions(
       learnerContext, curriculumContext, simulationsContext,
       { isNewUser, profileName, superegoReinterpretation, outputSize, egoModel, hyperparameters,
-        superegoCompliance, recognitionSeeking, learnerId, dialecticalNegotiation }
+        systemPromptExtension, superegoCompliance, recognitionSeeking, learnerId, dialecticalNegotiation }
     );
     currentSuggestions = egoRetry.suggestions || [];
     // Accumulate retry metrics
@@ -2311,7 +2324,7 @@ export async function runDialogue(context, options = {}) {
         superegoResult,
         learnerContext,
         curriculumContext,
-        { profileName, from: 'ego', to: 'user', direction: 'response', egoModel }
+        { profileName, from: 'ego', to: 'user', direction: 'response', egoModel, systemPromptExtension }
       );
       currentSuggestions = egoRevision.suggestions;
 
@@ -2389,7 +2402,7 @@ export async function runDialogue(context, options = {}) {
       superegoResult,
       learnerContext,
       curriculumContext,
-      { profileName, egoModel }
+      { profileName, egoModel, systemPromptExtension }
     );
     currentSuggestions = egoRevision.suggestions;
 

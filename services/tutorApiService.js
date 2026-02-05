@@ -90,6 +90,7 @@ export async function generateSuggestions(context, config = {}) {
     trace = true,
     superegoStrategy = null, // Superego intervention strategy (e.g., 'socratic_challenge')
     outputSize = 'normal', // compact, normal, expanded - affects response verbosity
+    systemPromptExtension = null, // Dynamic directives prepended to ego system prompt (prompt rewriting)
   } = config;
 
   const startTime = Date.now();
@@ -128,6 +129,7 @@ export async function generateSuggestions(context, config = {}) {
         maxRounds: effectiveMaxRounds,
         superegoStrategy, // Pass through superego intervention strategy
         outputSize, // compact, normal, expanded - affects response verbosity
+        systemPromptExtension, // Dynamic directives prepended to ego system prompt
         // Enable trace for transcript/expand mode to ensure complete logging
         trace: trace || dialogueEngine.isTranscriptMode() || dialogueEngine.isExpandMode(),
       }
