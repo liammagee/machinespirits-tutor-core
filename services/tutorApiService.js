@@ -91,6 +91,7 @@ export async function generateSuggestions(context, config = {}) {
     superegoStrategy = null, // Superego intervention strategy (e.g., 'socratic_challenge')
     outputSize = 'normal', // compact, normal, expanded - affects response verbosity
     systemPromptExtension = null, // Dynamic directives prepended to ego system prompt (prompt rewriting)
+    learnerId = null, // For Writing Pad memory persistence between turns
   } = config;
 
   const startTime = Date.now();
@@ -130,6 +131,7 @@ export async function generateSuggestions(context, config = {}) {
         superegoStrategy, // Pass through superego intervention strategy
         outputSize, // compact, normal, expanded - affects response verbosity
         systemPromptExtension, // Dynamic directives prepended to ego system prompt
+        learnerId, // Writing Pad memory persistence (Phase 1)
         // Enable trace for transcript/expand mode to ensure complete logging
         trace: trace || dialogueEngine.isTranscriptMode() || dialogueEngine.isExpandMode(),
       }
