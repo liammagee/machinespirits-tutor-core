@@ -160,11 +160,44 @@ function extractStructuredSummary(learnerContext) {
   return parts.join('\n');
 }
 
-// Current dialogue ID for logging context
+// Per-dialogue state map: dialogueId -> { profileName, transcriptStep, stepCounter }
+// Replaces module-level singletons to support parallel dialogue runs safely.
+const _dialogueStates = new Map();
+
+// Fallback "last active" dialogue ID for backward-compat with external callers
 let currentDialogueId = null;
 
-// Current profile name for logging flow direction
-let currentProfileName = null;
+/**
+ * Get or create the per-dialogue state object for a given dialogue ID.
+ * @param {string} [dialogueId] - Dialogue ID (falls back to currentDialogueId)
+ * @returns {{ profileName: string|null, transcriptStep: number, stepCounter: number }}
+ */
+function _getState(dialogueId) {
+  const id = dialogueId || currentDialogueId;
+  if (!id) return { profileName: null, transcriptStep: 0, stepCounter: 0 };
+  if (!_dialogueStates.has(id)) {
+    _dialogueStates.set(id, { profileName: null, transcriptStep: 0, stepCounter: 0 });
+  }
+  return _dialogueStates.get(id);
+}
+
+/**
+ * Initialize per-dialogue state for a new dialogue run.
+ * Cleans up old entries if the map grows too large.
+ * @param {string} dialogueId
+ * @param {string} [profileName]
+ */
+function _initDialogueState(dialogueId, profileName) {
+  // Evict old entries if map gets large (keep last 50)
+  if (_dialogueStates.size > 50) {
+    const keys = [..._dialogueStates.keys()];
+    for (let i = 0; i < keys.length - 50; i++) {
+      _dialogueStates.delete(keys[i]);
+    }
+  }
+  _dialogueStates.set(dialogueId, { profileName: profileName || null, transcriptStep: 0, stepCounter: 0 });
+  currentDialogueId = dialogueId;
+}
 
 /**
  * Set the current dialogue ID for log correlation
@@ -184,14 +217,16 @@ export function getCurrentDialogueId() {
  * Set the current profile name for flow direction logging
  */
 export function setCurrentProfileName(name) {
-  currentProfileName = name;
+  const state = _getState();
+  state.profileName = name;
 }
 
 /**
  * Get the current profile name
  */
 export function getCurrentProfileName() {
-  return currentProfileName;
+  const state = _getState();
+  return state.profileName;
 }
 
 /**
@@ -254,8 +289,6 @@ try {
 // - TUTOR_EXPAND=true or --expand: Show full prompt/response for each message
 // - Metrics (tokens, latency) shown when available
 
-let transcriptStep = 0;
-
 function isTranscriptMode() {
   return process.env.TUTOR_TRANSCRIPT === 'true';
 }
@@ -265,7 +298,8 @@ function isExpandMode() {
 }
 
 function resetTranscript() {
-  transcriptStep = 0;
+  const state = _getState();
+  state.transcriptStep = 0;
 }
 
 /**
@@ -314,7 +348,8 @@ function parseContextSummary(contextStr) {
 function transcript(role, content, options = {}) {
   if (!isTranscriptMode()) return;
 
-  transcriptStep++;
+  const state = _getState();
+  state.transcriptStep++;
   const roleColors = {
     'LEARNER CONTEXT': '\x1b[32m',  // green
     'LEARNER ACTION': '\x1b[35m',    // magenta - learner's response/action
@@ -333,7 +368,7 @@ function transcript(role, content, options = {}) {
   const { metrics, prompt, response, context } = options;
 
   // Build header with metrics
-  let header = `\n${bold}[${transcriptStep}] ${color}${role}${reset}`;
+  let header = `\n${bold}[${state.transcriptStep}] ${color}${role}${reset}`;
   if (metrics) {
     const parts = [];
     if (metrics.model) {
@@ -696,21 +731,20 @@ function formatChatLog(agent, data, options = {}) {
   return lines.join('\n');
 }
 
-// Module-level step counter for conversation flow tracking
-let dialogueStepCounter = 0;
-
 /**
  * Reset step counter for a new dialogue
  */
 function resetStepCounter() {
-  dialogueStepCounter = 0;
+  const state = _getState();
+  state.stepCounter = 0;
 }
 
 /**
  * Get next step number
  */
 function nextStep() {
-  return ++dialogueStepCounter;
+  const state = _getState();
+  return ++state.stepCounter;
 }
 
 /**
@@ -758,8 +792,9 @@ function logApiCall(agentRole, action, data, options = {}) {
   const actionLabel = getActionLabel(agentRole);
   const agent = getAgentName(agentRole);
 
-  // Get current dialogue ID for log correlation
+  // Get current dialogue ID and profile from per-dialogue state
   const dialogueId = currentDialogueId;
+  const state = _getState(dialogueId);
 
   // Show prompts in console if trace_prompts is enabled (config or env var)
   const showPrompt = loggingConfig.trace_prompts === true || process.env.TUTOR_TRACE_PROMPTS === 'true';
@@ -769,7 +804,7 @@ function logApiCall(agentRole, action, data, options = {}) {
   // Determine flow direction based on agent role and profile
   // IMPORTANT: Always include explicit from/to for every message
   // Allow overrides from options for special cases like incorporate-feedback
-  const profile = configLoader.getActiveProfile(currentProfileName);
+  const profile = configLoader.getActiveProfile(state.profileName);
   const hasSuperego = profile.dialogue?.enabled === true && profile.superego !== null;
 
   let flowDirection;
@@ -854,6 +889,7 @@ function logFlowEntry(agent, action, data = {}) {
   const step = data.forceStep ?? nextStep();
   const dialogueId = currentDialogueId;
   const timestamp = new Date().toISOString();
+  // Note: dialogueId comes from module-level currentDialogueId (set by runDialogue/quickGenerate)
 
   const logEntry = {
     timestamp,
@@ -1940,12 +1976,6 @@ export async function runDialogue(context, options = {}) {
     _skipLogging = false, // Internal: skip file logging for multi-turn intermediate steps
   } = options;
 
-  // Reset step counter for fresh dialogue flow numbering (unless continuing dialogue)
-  if (!_dialogueId) {
-    resetStepCounter();
-    resetTranscript();
-  }
-
   const dialogueConfig = configLoader.getDialogueConfig(profileName);
   const effectiveMaxRounds = maxRounds ?? dialogueConfig.max_rounds ?? 2;
   const convergenceThreshold = dialogueConfig.convergence_threshold ?? 0.85;
@@ -1953,9 +1983,15 @@ export async function runDialogue(context, options = {}) {
   // Use provided dialogue ID for multi-turn continuity, or create new one
   const dialogueId = _dialogueId || `dialogue-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-  // Set current dialogue ID and profile for log correlation
-  setCurrentDialogueId(dialogueId);
-  setCurrentProfileName(profileName);
+  // Initialize per-dialogue state (safe for parallel runs)
+  if (!_dialogueId) {
+    _initDialogueState(dialogueId, profileName);
+  } else {
+    // Continuing an existing dialogue - just update the active pointer
+    currentDialogueId = dialogueId;
+    const state = _getState(dialogueId);
+    state.profileName = profileName;
+  }
 
   // Start monitoring session for real-time tracking
   const profile = configLoader.getActiveProfile(profileName);
@@ -2554,8 +2590,7 @@ export async function quickGenerate(context, options = {}) {
 
   // Generate unique dialogue ID for log correlation (even in quick mode)
   const dialogueId = `dialogue-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  setCurrentDialogueId(dialogueId);
-  setCurrentProfileName(profileName);
+  _initDialogueState(dialogueId, profileName);
 
   // Start monitoring session for quick generation
   const profile = configLoader.getActiveProfile(profileName);

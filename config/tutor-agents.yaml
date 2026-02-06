@@ -519,6 +519,90 @@ profiles:
       rapid_nav_window_ms: 30000
       retry_frustration_count: 3
 
+  # Placebo: Length-matched prompts WITHOUT recognition theory (eval repo cells 15-18)
+  # Controls for prompt length/complexity vs recognition theory content
+  placebo:
+    description: "Placebo prompts - length-matched to recognition but no Hegelian theory"
+    recognition_mode: false
+    memory_enabled: true
+    dialogue:
+      enabled: true
+      max_rounds: 2
+      convergence_threshold: 0.7
+
+    ego:
+      provider: openrouter
+      model: nemotron
+      staging: front
+      prompt_file: tutor-ego-placebo.md
+      hyperparameters:
+        temperature: 0.6
+        max_tokens: 3500
+
+    superego:
+      provider: openrouter
+      model: kimi-k2.5
+      staging: back
+      prompt_file: tutor-superego-placebo.md
+      hyperparameters:
+        temperature: 0.4
+        max_tokens: 3500
+
+    intervention_thresholds:
+      low_intensity_skip_dialogue: false
+      high_intensity_extra_rounds: true
+      struggle_signal_threshold: 2
+      rapid_nav_window_ms: 30000
+      retry_frustration_count: 3
+
+  # Memory-only: Base prompts with memory integration, no recognition theory (eval repo cell 19)
+  memory:
+    description: "Memory isolation - base + memory integration, no recognition theory"
+    recognition_mode: false
+    memory_enabled: true
+    dialogue:
+      enabled: false
+      max_rounds: 0
+
+    ego:
+      provider: openrouter
+      model: nemotron
+      staging: front
+      prompt_file: tutor-ego-memory.md
+      hyperparameters:
+        temperature: 0.6
+        max_tokens: 3500
+
+    superego: null
+
+    intervention_thresholds:
+      low_intensity_skip_dialogue: true
+      high_intensity_extra_rounds: false
+
+  # Recognition without memory: Recognition prompts but no Writing Pad (eval repo cell 20)
+  recognition_nomem:
+    description: "Recognition without memory - isolating recognition theory from memory"
+    recognition_mode: true
+    memory_enabled: false
+    dialogue:
+      enabled: false
+      max_rounds: 0
+
+    ego:
+      provider: openrouter
+      model: nemotron
+      staging: front
+      prompt_file: tutor-ego-recognition-nomem.md
+      hyperparameters:
+        temperature: 0.6
+        max_tokens: 3500
+
+    superego: null
+
+    intervention_thresholds:
+      low_intensity_skip_dialogue: true
+      high_intensity_extra_rounds: false
+
   # Recognition: Phase 4 mode - full memory persistence, recognition-enhanced prompts
   # Use this as the treatment group for recognition evaluation
   recognition:
