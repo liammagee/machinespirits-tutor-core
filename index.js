@@ -37,7 +37,8 @@ export {
   runDialogue,
   quickGenerate,
   getAvailableProfiles,
-  analyzeInterventionNeeds
+  analyzeInterventionNeeds,
+  setLogDir
 } from './services/tutorDialogueEngine.js';
 
 export {

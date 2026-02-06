@@ -27,9 +27,33 @@ import * as monitoringService from './monitoringService.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, '..');
-const LOGS_DIR = path.join(ROOT_DIR, 'logs', 'tutor-dialogues');
-const API_LOGS_DIR = path.join(ROOT_DIR, 'logs', 'tutor-api');
-const DEBUG_LOGS_DIR = path.join(ROOT_DIR, 'logs', 'tutor-debug');
+const DEFAULT_LOG_ROOT = process.env.TUTOR_CORE_LOG_DIR || path.join(ROOT_DIR, 'logs');
+let _logRoot = DEFAULT_LOG_ROOT;
+
+// Derived log dirs — recomputed when _logRoot changes
+let LOGS_DIR = path.join(_logRoot, 'tutor-dialogues');
+let API_LOGS_DIR = path.join(_logRoot, 'tutor-api');
+let DEBUG_LOGS_DIR = path.join(_logRoot, 'tutor-debug');
+
+/**
+ * Set the root directory for all tutor-core logs.
+ * Call this before any dialogue runs to redirect logs to the consuming package's directory.
+ * @param {string} logRoot - Absolute path to the logs directory (e.g., '/path/to/myapp/logs')
+ */
+export function setLogDir(logRoot) {
+  _logRoot = logRoot;
+  LOGS_DIR = path.join(_logRoot, 'tutor-dialogues');
+  API_LOGS_DIR = path.join(_logRoot, 'tutor-api');
+  DEBUG_LOGS_DIR = path.join(_logRoot, 'tutor-debug');
+  // Ensure directories exist for the new path
+  try {
+    for (const dir of [LOGS_DIR, API_LOGS_DIR]) {
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    }
+  } catch (e) {
+    // Non-fatal — dirs will be created on first write attempt
+  }
+}
 
 // JSDoc type definitions for dialogue system
 /**
@@ -1730,9 +1754,9 @@ Respond with ONLY a JSON object in the format specified.`;
 
   if (!parsed) {
     return {
-      approved: true,
-      interventionType: 'none',
-      feedback: retried ? 'Parse error (fallback also failed), approving by default' : 'Unable to parse review, approving by default',
+      approved: false,
+      interventionType: 'revise',
+      feedback: retried ? 'Parse error (fallback also failed), requesting revision' : 'Unable to parse review, requesting revision',
       rawResponse,
       metrics: fallbackMetrics || response,
       usedFallback: retried,
