@@ -579,6 +579,29 @@ profiles:
       low_intensity_skip_dialogue: true
       high_intensity_extra_rounds: false
 
+  # Hardwired rules: Base prompt + 5 superego-derived rules, no live superego (eval repo cells 13-14)
+  hardwired:
+    description: "Hardwired rules ablation - superego-derived rules embedded in ego prompt, no live superego"
+    recognition_mode: false
+    memory_enabled: false
+    dialogue:
+      enabled: false
+      max_rounds: 0
+
+    ego:
+      provider: openrouter
+      model: nemotron
+      prompt_file: tutor-ego-hardwired.md
+      hyperparameters:
+        temperature: 0.6
+        max_tokens: 3500
+
+    superego: null
+
+    intervention_thresholds:
+      low_intensity_skip_dialogue: true
+      high_intensity_extra_rounds: false
+
   # Recognition without memory: Recognition prompts but no Writing Pad (eval repo cell 20)
   recognition_nomem:
     description: "Recognition without memory - isolating recognition theory from memory"
