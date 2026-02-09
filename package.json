@@ -1,6 +1,6 @@
 {
   "name": "@machinespirits/tutor-core",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Core tutor services for Machine Spirits - Ego/Superego dialogue engine, AI providers, and configuration",
   "type": "module",
   "main": "index.js",

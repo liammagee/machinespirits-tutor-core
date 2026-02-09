@@ -28,6 +28,7 @@ export * as writingPadService from './services/writingPadService.js';
 export * as dialecticalEngine from './services/dialecticalEngine.js';
 export * as memoryDynamicsService from './services/memoryDynamicsService.js';
 export * as learnerIntegrationService from './services/learnerIntegrationService.js';
+export * as recognitionGamificationService from './services/recognitionGamificationService.js';
 
 // Database (for config persistence)
 export * as dbService from './services/dbService.js';
@@ -53,3 +54,13 @@ export {
   resolveModel,
   listProfiles
 } from './services/tutorConfigLoader.js';
+
+export {
+  getLearnerRecognitionProfile,
+  computeRecognitionDepth,
+  checkRecognitionMilestones,
+  getMemoryLayerProgression,
+  computeRecognitionFlow,
+  getDialecticalContinuity,
+  getMilestoneDefinitions
+} from './services/recognitionGamificationService.js';
