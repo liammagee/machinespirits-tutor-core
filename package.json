@@ -50,6 +50,13 @@
       "optional": true
     }
   },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "vitest": "^4.0.0"
+  },
   "engines": {
     "node": ">=18.0.0"
   }
