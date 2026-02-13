@@ -168,8 +168,24 @@ async function callOpenRouter(model, systemPrompt, messages, config) {
 
   const data = await res.json();
 
+  const message = data.choices?.[0]?.message;
+  // Thinking models (GLM-5, kimi-k2.5, deepseek-r1, etc.) may return their
+  // answer in `reasoning` or `reasoning_content` while `content` is empty.
+  // Fall back to the reasoning field so we don't silently drop the response.
+  let content = message?.content || '';
+  if (!content && message?.reasoning) {
+    content = message.reasoning;
+  } else if (!content && message?.reasoning_content) {
+    content = message.reasoning_content;
+  }
+  if (!content) {
+    const finishReason = data.choices?.[0]?.finish_reason || 'unknown';
+    const nativeError = data.choices?.[0]?.native_finish_reason || data.error?.message || '';
+    console.warn(`[OpenRouter] Empty response from ${effectiveModel}: finish_reason=${finishReason}, native=${nativeError}, choices=${data.choices?.length || 0}, error=${JSON.stringify(data.error || null)}`);
+  }
+
   return {
-    content: data.choices?.[0]?.message?.content || '',
+    content,
     model: effectiveModel,
     usage: {
       inputTokens: data.usage?.prompt_tokens || 0,
