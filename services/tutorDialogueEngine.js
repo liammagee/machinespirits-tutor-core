@@ -596,12 +596,10 @@ async function fetchOpenRouterGenerationDetails(generationId, apiKey) {
         continue;
       }
 
-      console.warn(`[OpenRouter] Generation details fetch failed: ${res.status}`);
+      // 404 is common for some models — silently return null
       return null;
     } catch (e) {
-      if (i === delays.length - 1) {
-        console.warn('[OpenRouter] Generation details fetch error:', e.message);
-      }
+      // Silently ignore — generation details are optional metadata
     }
   }
 
@@ -1038,7 +1036,15 @@ function extractJsonObject(text) {
  */
 async function callAI(agentConfig, systemPrompt, userPrompt, agentRole = 'unknown', options = {}) {
   const { provider, providerConfig, model, hyperparameters } = agentConfig;
-  const { temperature = 0.5, max_tokens = 1500, top_p } = hyperparameters;
+  let { temperature = 0.5, max_tokens = 1500, top_p } = hyperparameters;
+
+  // Thinking/reasoning models (kimi-k2-thinking, deepseek-r1) use internal
+  // chain-of-thought that consumes max_tokens. Boost significantly.
+  // Note: kimi-k2.5 (non-thinking) does NOT need this — it's a separate model.
+  const isThinkingModel = model?.includes('kimi-k2-thinking') || model?.includes('deepseek-r1');
+  if (isThinkingModel && max_tokens < 8000) {
+    max_tokens = 8000;
+  }
 
   if (!providerConfig.isConfigured) {
     throw new Error(`Provider ${provider} not configured (missing API key)`);
@@ -1373,13 +1379,16 @@ async function egoGenerateSuggestions(learnerContext, curriculumContext, simulat
     superegoReinterpretation = null,
     outputSize = 'normal',
     egoModel = null,
+    superegoModel = null,
     hyperparameters = null, // Override hyperparameters (e.g., max_tokens for reasoning models)
     systemPromptExtension = null, // Dynamic directives prepended to ego system prompt (prompt rewriting)
+    superegoPromptExtension = null, // Dynamic disposition/reflection prepended to superego prompt
     // Recognition engine parameters (Phase 0-1)
     superegoCompliance = 0.7,
     recognitionSeeking = 0.6,
     learnerId = null, // Phase 1: Writing Pad persistence
     dialecticalNegotiation = false, // Phase 2: AI-powered dialectical struggle
+    behavioralOverrides = null, // Quantitative params from superego self-reflection
   } = options;
 
   let egoConfig = configLoader.getAgentConfig('ego', profileName);
@@ -1525,6 +1534,10 @@ ${userPrompt}`;
           recognitionSeeking,
           allowGenuineConflict: true,
           maxNegotiationRounds: 2,
+          egoModel,
+          superegoModel,
+          superegoPromptExtension,
+          behavioralOverrides,
         });
 
         if (negotiation.recognitionMoment) {
@@ -1688,7 +1701,7 @@ function getFallbackConfig(originalConfig) {
  * Superego reviews and critiques Ego's suggestions
  */
 async function superegoReview(egoSuggestions, learnerContext, options = {}) {
-  const { previousFeedback = null, profileName = null, strategy = null, superegoModel = null } = options;
+  const { previousFeedback = null, profileName = null, strategy = null, superegoModel = null, superegoPromptExtension = null } = options;
 
   let superegoConfig = configLoader.getAgentConfig('superego', profileName, { strategy });
   if (!superegoConfig && !superegoModel) {
@@ -1769,19 +1782,19 @@ If the suggestion is good but could be improved, set approved: false with interv
 
 Respond with ONLY a JSON object in the format specified.`;
 
-  const response = await callAI(superegoConfig, superegoConfig.prompt, userPrompt, 'superego');
+  // Apply superego disposition extension if provided (prepend to system prompt)
+  const effectiveSuperegoPrompt = superegoPromptExtension
+    ? `${superegoPromptExtension}\n\n${superegoConfig.prompt}`
+    : superegoConfig.prompt;
 
-  // Create fallback retry function
-  const fallbackConfig = getFallbackConfig(superegoConfig);
-  const retryFn = fallbackConfig ? async () => {
-    if (!isTranscriptMode()) {
-      console.log(`[Superego] Falling back from ${superegoConfig.modelName || 'haiku'} to ${fallbackConfig.modelName || 'sonnet'}`);
-    }
-    return callAI(fallbackConfig, superegoConfig.prompt, userPrompt, 'superego-fallback');
-  } : null;
+  const response = await callAI(superegoConfig, effectiveSuperegoPrompt, userPrompt, 'superego');
 
-  // Parse with fallback
-  const { parsed, retried, rawResponse, metrics: fallbackMetrics } = await parseJsonWithFallback(
+  // No model-swapping fallback: parse failures auto-approve rather than
+  // silently switching to a different model (which compromises test integrity)
+  const retryFn = null;
+
+  // Parse without fallback
+  const { parsed, rawResponse } = await parseJsonWithFallback(
     response.text,
     /\{[\s\S]*\}/,
     retryFn,
@@ -1790,20 +1803,21 @@ Respond with ONLY a JSON object in the format specified.`;
 
   if (!parsed) {
     return {
-      approved: false,
-      interventionType: 'revise',
-      feedback: retried ? 'Parse error (fallback also failed), requesting revision' : 'Unable to parse review, requesting revision',
+      approved: true,  // Don't reject ego for superego's parse failure
+      interventionType: 'none',
+      feedback: 'Unable to parse superego review, auto-approving',
       rawResponse,
-      metrics: fallbackMetrics || response,
-      usedFallback: retried,
+      metrics: response,
+      usedFallback: false,
+      parseFailure: true,  // Flag for trace analysis
     };
   }
 
   return {
     ...parsed,
     rawResponse,
-    metrics: fallbackMetrics || response,
-    usedFallback: retried,
+    metrics: response,
+    usedFallback: false,
   };
 }
 
@@ -1967,11 +1981,13 @@ export async function runDialogue(context, options = {}) {
     superegoStrategy = null, // Superego intervention strategy (e.g., 'socratic_challenge')
     outputSize = 'normal', // compact, normal, expanded - affects response verbosity
     systemPromptExtension = null, // Dynamic directives prepended to ego system prompt (prompt rewriting)
+    superegoPromptExtension = null, // Dynamic disposition adjustments prepended to superego system prompt
     // Recognition engine parameters (Phase 0-1)
     superegoCompliance = 0.7, // How much ego obeys the ghost (0.0-1.0)
     recognitionSeeking = 0.6,  // How much ego seeks recognition from learner (0.0-1.0)
     learnerId = null, // Phase 1: Writing Pad persistence
     dialecticalNegotiation = false, // Phase 2: AI-powered dialectical struggle
+    behavioralOverrides = null, // Quantitative params from superego self-reflection
     _dialogueId = null, // Internal: reuse dialogue ID for multi-turn continuity
     _skipLogging = false, // Internal: skip file logging for multi-turn intermediate steps
   } = options;
@@ -2186,13 +2202,16 @@ export async function runDialogue(context, options = {}) {
       superegoReinterpretation,
       outputSize,
       egoModel,
+      superegoModel,
       hyperparameters,
       systemPromptExtension,
+      superegoPromptExtension,
       // Pass recognition parameters
       superegoCompliance,
       recognitionSeeking,
       learnerId,
       dialecticalNegotiation,
+      behavioralOverrides,
     }
   );
   currentSuggestions = egoInitial.suggestions;
@@ -2242,8 +2261,8 @@ export async function runDialogue(context, options = {}) {
     console.log(`[Dialogue] Ego initial generation empty for dialogue profile, retrying...`);
     const egoRetry = await egoGenerateSuggestions(
       learnerContext, curriculumContext, simulationsContext,
-      { isNewUser, profileName, superegoReinterpretation, outputSize, egoModel, hyperparameters,
-        systemPromptExtension, superegoCompliance, recognitionSeeking, learnerId, dialecticalNegotiation }
+      { isNewUser, profileName, superegoReinterpretation, outputSize, egoModel, superegoModel, hyperparameters,
+        systemPromptExtension, superegoPromptExtension, superegoCompliance, recognitionSeeking, learnerId, dialecticalNegotiation, behavioralOverrides }
     );
     currentSuggestions = egoRetry.suggestions || [];
     // Accumulate retry metrics
@@ -2311,7 +2330,7 @@ export async function runDialogue(context, options = {}) {
     const superegoResult = await superegoReview(
       currentSuggestions,
       learnerContext,
-      { previousFeedback, profileName, strategy: superegoStrategy, superegoModel }
+      { previousFeedback, profileName, strategy: superegoStrategy, superegoModel, superegoPromptExtension }
     );
 
     if (superegoResult.metrics) {

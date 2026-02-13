@@ -1174,6 +1174,450 @@ profiles:
   # These profiles explore different model configurations to find optimal
   # cost/quality tradeoffs for the Ego/Superego dialogue system.
 
+  # ============================================================================
+  # DIVERGENT SUPEREGO PROFILES (Phase 6)
+  # ============================================================================
+  # These profiles test whether genuinely divergent internal agents — with
+  # conflicting objectives — produce the behavioral modulation predicted by
+  # the Drama Machine framework. The convergent superego (standard) shares
+  # the Ego's goal; these divergent variants challenge it from orthogonal angles.
+  #
+  # Three divergent variants:
+  #   - Suspicious: Recognition skeptic — challenges hollow/formulaic engagement
+  #   - Adversary: Pedagogical contrarian — argues for the opposite method
+  #   - Advocate: Learner's inner voice — represents the learner's actual experience
+  #
+  # Key differences from convergent profiles:
+  #   - max_rounds: 3 (more room for genuine negotiation)
+  #   - convergence_threshold: 0.65/0.60 (lower bar — perfect agreement unlikely)
+
+  # Suspicious: Base prompts + recognition-skeptic superego
+  suspicious:
+    description: "Divergent: base ego + suspicious superego (challenges hollow recognition)"
+    recognition_mode: false
+    memory_enabled: false
+    dialogue:
+      enabled: true
+      max_rounds: 3
+      convergence_threshold: 0.65
+
+    ego:
+      provider: openrouter
+      model: nemotron
+      staging: front
+      prompt_file: tutor-ego.md
+      hyperparameters:
+        temperature: 0.6
+        max_tokens: 3500
+
+    superego:
+      provider: openrouter
+      model: kimi-k2.5
+      staging: back
+      prompt_file: tutor-superego-suspicious.md
+      hyperparameters:
+        temperature: 0.4
+        max_tokens: 3500
+
+    intervention_thresholds:
+      low_intensity_skip_dialogue: false
+      high_intensity_extra_rounds: true
+      struggle_signal_threshold: 2
+      rapid_nav_window_ms: 30000
+      retry_frustration_count: 3
+
+  # Suspicious + Recognition: Recognition prompts + recognition-skeptic superego
+  suspicious_recognition:
+    description: "Divergent: recognition ego + suspicious superego (challenges hollow recognition)"
+    recognition_mode: true
+    memory_enabled: true
+    dialogue:
+      enabled: true
+      max_rounds: 3
+      convergence_threshold: 0.60
+
+    ego:
+      provider: openrouter
+      model: nemotron
+      staging: front
+      prompt_file: tutor-ego-recognition.md
+      hyperparameters:
+        temperature: 0.6
+        max_tokens: 3500
+
+    superego:
+      provider: openrouter
+      model: kimi-k2.5
+      staging: back
+      prompt_file: tutor-superego-suspicious.md
+      hyperparameters:
+        temperature: 0.4
+        max_tokens: 3500
+
+    intervention_thresholds:
+      low_intensity_skip_dialogue: false
+      high_intensity_extra_rounds: true
+      struggle_signal_threshold: 2
+      rapid_nav_window_ms: 30000
+      retry_frustration_count: 3
+
+  # Adversary: Base prompts + pedagogical contrarian superego
+  adversary:
+    description: "Divergent: base ego + adversary superego (argues for opposite method)"
+    recognition_mode: false
+    memory_enabled: false
+    dialogue:
+      enabled: true
+      max_rounds: 3
+      convergence_threshold: 0.65
+
+    ego:
+      provider: openrouter
+      model: nemotron
+      staging: front
+      prompt_file: tutor-ego.md
+      hyperparameters:
+        temperature: 0.6
+        max_tokens: 3500
+
+    superego:
+      provider: openrouter
+      model: kimi-k2.5
+      staging: back
+      prompt_file: tutor-superego-adversary.md
+      hyperparameters:
+        temperature: 0.4
+        max_tokens: 3500
+
+    intervention_thresholds:
+      low_intensity_skip_dialogue: false
+      high_intensity_extra_rounds: true
+      struggle_signal_threshold: 2
+      rapid_nav_window_ms: 30000
+      retry_frustration_count: 3
+
+  # Adversary + Recognition: Recognition prompts + pedagogical contrarian superego
+  adversary_recognition:
+    description: "Divergent: recognition ego + adversary superego (argues for opposite method)"
+    recognition_mode: true
+    memory_enabled: true
+    dialogue:
+      enabled: true
+      max_rounds: 3
+      convergence_threshold: 0.60
+
+    ego:
+      provider: openrouter
+      model: nemotron
+      staging: front
+      prompt_file: tutor-ego-recognition.md
+      hyperparameters:
+        temperature: 0.6
+        max_tokens: 3500
+
+    superego:
+      provider: openrouter
+      model: kimi-k2.5
+      staging: back
+      prompt_file: tutor-superego-adversary.md
+      hyperparameters:
+        temperature: 0.4
+        max_tokens: 3500
+
+    intervention_thresholds:
+      low_intensity_skip_dialogue: false
+      high_intensity_extra_rounds: true
+      struggle_signal_threshold: 2
+      rapid_nav_window_ms: 30000
+      retry_frustration_count: 3
+
+  # Advocate: Base prompts + learner advocate superego
+  advocate:
+    description: "Divergent: base ego + advocate superego (represents learner's experience)"
+    recognition_mode: false
+    memory_enabled: false
+    dialogue:
+      enabled: true
+      max_rounds: 3
+      convergence_threshold: 0.65
+
+    ego:
+      provider: openrouter
+      model: nemotron
+      staging: front
+      prompt_file: tutor-ego.md
+      hyperparameters:
+        temperature: 0.6
+        max_tokens: 3500
+
+    superego:
+      provider: openrouter
+      model: kimi-k2.5
+      staging: back
+      prompt_file: tutor-superego-advocate.md
+      hyperparameters:
+        temperature: 0.4
+        max_tokens: 3500
+
+    intervention_thresholds:
+      low_intensity_skip_dialogue: false
+      high_intensity_extra_rounds: true
+      struggle_signal_threshold: 2
+      rapid_nav_window_ms: 30000
+      retry_frustration_count: 3
+
+  # Advocate + Recognition: Recognition prompts + learner advocate superego
+  advocate_recognition:
+    description: "Divergent: recognition ego + advocate superego (represents learner's experience)"
+    recognition_mode: true
+    memory_enabled: true
+    dialogue:
+      enabled: true
+      max_rounds: 3
+      convergence_threshold: 0.60
+
+    ego:
+      provider: openrouter
+      model: nemotron
+      staging: front
+      prompt_file: tutor-ego-recognition.md
+      hyperparameters:
+        temperature: 0.6
+        max_tokens: 3500
+
+    superego:
+      provider: openrouter
+      model: kimi-k2.5
+      staging: back
+      prompt_file: tutor-superego-advocate.md
+      hyperparameters:
+        temperature: 0.4
+        max_tokens: 3500
+
+    intervention_thresholds:
+      low_intensity_skip_dialogue: false
+      high_intensity_extra_rounds: true
+      struggle_signal_threshold: 2
+      rapid_nav_window_ms: 30000
+      retry_frustration_count: 3
+
+  # ============================================================================
+  # DIALECTICAL SYNTHESIS PROFILES (Phase 6b)
+  # ============================================================================
+  # Same divergent superegos as above, but paired with a dialectical ego that
+  # is trained to SYNTHESIZE rather than capitulate under adversarial challenge.
+  # The dialectical ego follows an Aufhebung protocol: defend → extract → integrate.
+
+  # Dialectical + Suspicious (base)
+  dialectical_suspicious:
+    description: "Dialectical: base dialectical ego + suspicious superego (synthesis, not capitulation)"
+    recognition_mode: false
+    memory_enabled: false
+    dialogue:
+      enabled: true
+      max_rounds: 3
+      convergence_threshold: 0.65
+
+    ego:
+      provider: openrouter
+      model: nemotron
+      staging: front
+      prompt_file: tutor-ego-dialectical.md
+      hyperparameters:
+        temperature: 0.6
+        max_tokens: 3500
+
+    superego:
+      provider: openrouter
+      model: kimi-k2.5
+      staging: back
+      prompt_file: tutor-superego-suspicious.md
+      hyperparameters:
+        temperature: 0.4
+        max_tokens: 3500
+
+    intervention_thresholds:
+      low_intensity_skip_dialogue: false
+      high_intensity_extra_rounds: true
+      struggle_signal_threshold: 2
+      rapid_nav_window_ms: 30000
+      retry_frustration_count: 3
+
+  # Dialectical + Suspicious (recognition)
+  dialectical_suspicious_recognition:
+    description: "Dialectical: recognition dialectical ego + suspicious superego"
+    recognition_mode: true
+    memory_enabled: true
+    dialogue:
+      enabled: true
+      max_rounds: 3
+      convergence_threshold: 0.60
+
+    ego:
+      provider: openrouter
+      model: nemotron
+      staging: front
+      prompt_file: tutor-ego-recognition-dialectical.md
+      hyperparameters:
+        temperature: 0.6
+        max_tokens: 3500
+
+    superego:
+      provider: openrouter
+      model: kimi-k2.5
+      staging: back
+      prompt_file: tutor-superego-suspicious.md
+      hyperparameters:
+        temperature: 0.4
+        max_tokens: 3500
+
+    intervention_thresholds:
+      low_intensity_skip_dialogue: false
+      high_intensity_extra_rounds: true
+      struggle_signal_threshold: 2
+      rapid_nav_window_ms: 30000
+      retry_frustration_count: 3
+
+  # Dialectical + Adversary (base)
+  dialectical_adversary:
+    description: "Dialectical: base dialectical ego + adversary superego (synthesis, not capitulation)"
+    recognition_mode: false
+    memory_enabled: false
+    dialogue:
+      enabled: true
+      max_rounds: 3
+      convergence_threshold: 0.65
+
+    ego:
+      provider: openrouter
+      model: nemotron
+      staging: front
+      prompt_file: tutor-ego-dialectical.md
+      hyperparameters:
+        temperature: 0.6
+        max_tokens: 3500
+
+    superego:
+      provider: openrouter
+      model: kimi-k2.5
+      staging: back
+      prompt_file: tutor-superego-adversary.md
+      hyperparameters:
+        temperature: 0.4
+        max_tokens: 3500
+
+    intervention_thresholds:
+      low_intensity_skip_dialogue: false
+      high_intensity_extra_rounds: true
+      struggle_signal_threshold: 2
+      rapid_nav_window_ms: 30000
+      retry_frustration_count: 3
+
+  # Dialectical + Adversary (recognition)
+  dialectical_adversary_recognition:
+    description: "Dialectical: recognition dialectical ego + adversary superego"
+    recognition_mode: true
+    memory_enabled: true
+    dialogue:
+      enabled: true
+      max_rounds: 3
+      convergence_threshold: 0.60
+
+    ego:
+      provider: openrouter
+      model: nemotron
+      staging: front
+      prompt_file: tutor-ego-recognition-dialectical.md
+      hyperparameters:
+        temperature: 0.6
+        max_tokens: 3500
+
+    superego:
+      provider: openrouter
+      model: kimi-k2.5
+      staging: back
+      prompt_file: tutor-superego-adversary.md
+      hyperparameters:
+        temperature: 0.4
+        max_tokens: 3500
+
+    intervention_thresholds:
+      low_intensity_skip_dialogue: false
+      high_intensity_extra_rounds: true
+      struggle_signal_threshold: 2
+      rapid_nav_window_ms: 30000
+      retry_frustration_count: 3
+
+  # Dialectical + Advocate (base)
+  dialectical_advocate:
+    description: "Dialectical: base dialectical ego + advocate superego (synthesis, not capitulation)"
+    recognition_mode: false
+    memory_enabled: false
+    dialogue:
+      enabled: true
+      max_rounds: 3
+      convergence_threshold: 0.65
+
+    ego:
+      provider: openrouter
+      model: nemotron
+      staging: front
+      prompt_file: tutor-ego-dialectical.md
+      hyperparameters:
+        temperature: 0.6
+        max_tokens: 3500
+
+    superego:
+      provider: openrouter
+      model: kimi-k2.5
+      staging: back
+      prompt_file: tutor-superego-advocate.md
+      hyperparameters:
+        temperature: 0.4
+        max_tokens: 3500
+
+    intervention_thresholds:
+      low_intensity_skip_dialogue: false
+      high_intensity_extra_rounds: true
+      struggle_signal_threshold: 2
+      rapid_nav_window_ms: 30000
+      retry_frustration_count: 3
+
+  # Dialectical + Advocate (recognition)
+  dialectical_advocate_recognition:
+    description: "Dialectical: recognition dialectical ego + advocate superego"
+    recognition_mode: true
+    memory_enabled: true
+    dialogue:
+      enabled: true
+      max_rounds: 3
+      convergence_threshold: 0.60
+
+    ego:
+      provider: openrouter
+      model: nemotron
+      staging: front
+      prompt_file: tutor-ego-recognition-dialectical.md
+      hyperparameters:
+        temperature: 0.6
+        max_tokens: 3500
+
+    superego:
+      provider: openrouter
+      model: kimi-k2.5
+      staging: back
+      prompt_file: tutor-superego-advocate.md
+      hyperparameters:
+        temperature: 0.4
+        max_tokens: 3500
+
+    intervention_thresholds:
+      low_intensity_skip_dialogue: false
+      high_intensity_extra_rounds: true
+      struggle_signal_threshold: 2
+      rapid_nav_window_ms: 30000
+      retry_frustration_count: 3
+
   # Asymmetric: Cheap ego (Haiku) + thoughtful superego (Sonnet)
   # Hypothesis: Fast initial generation, quality comes from critique
   asymmetric:
