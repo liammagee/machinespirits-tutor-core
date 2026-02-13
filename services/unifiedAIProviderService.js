@@ -7,6 +7,7 @@
  */
 
 import { getApiKey, getDefaultModel, getDefaultProviderId, logInteraction } from './aiConfigService.js';
+import { parseSSEStream } from './sseStreamParser.js';
 
 // ============================================================================
 // Configuration Presets
@@ -149,6 +150,7 @@ async function callOpenRouter(model, systemPrompt, messages, config) {
       })),
     ],
   };
+  if (config.onToken) body.stream = true;
 
   const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
@@ -166,34 +168,46 @@ async function callOpenRouter(model, systemPrompt, messages, config) {
     throw new Error(`OpenRouter error: ${res.status} - ${error.error?.message || 'Unknown'}`);
   }
 
-  const data = await res.json();
+  let content, inputTokens, outputTokens, generationId;
+  if (config.onToken) {
+    const parsed = await parseSSEStream(res, { onToken: config.onToken, format: 'openai' });
+    content = parsed.text || '';
+    inputTokens = parsed.inputTokens || 0;
+    outputTokens = parsed.outputTokens || 0;
+  } else {
+    const data = await res.json();
+    generationId = data.id || null;
 
-  const message = data.choices?.[0]?.message;
-  // Thinking models (GLM-5, kimi-k2.5, deepseek-r1, etc.) may return their
-  // answer in `reasoning` or `reasoning_content` while `content` is empty.
-  // Fall back to the reasoning field so we don't silently drop the response.
-  let content = message?.content || '';
-  if (!content && message?.reasoning) {
-    content = message.reasoning;
-  } else if (!content && message?.reasoning_content) {
-    content = message.reasoning_content;
-  }
-  if (!content) {
-    const finishReason = data.choices?.[0]?.finish_reason || 'unknown';
-    const nativeError = data.choices?.[0]?.native_finish_reason || data.error?.message || '';
-    console.warn(`[OpenRouter] Empty response from ${effectiveModel}: finish_reason=${finishReason}, native=${nativeError}, choices=${data.choices?.length || 0}, error=${JSON.stringify(data.error || null)}`);
+    const message = data.choices?.[0]?.message;
+    // Thinking models (GLM-5, kimi-k2.5, deepseek-r1, etc.) may return their
+    // answer in `reasoning` or `reasoning_content` while `content` is empty.
+    // Fall back to the reasoning field so we don't silently drop the response.
+    content = message?.content || '';
+    if (!content && message?.reasoning) {
+      content = message.reasoning;
+    } else if (!content && message?.reasoning_content) {
+      content = message.reasoning_content;
+    }
+    if (!content) {
+      const finishReason = data.choices?.[0]?.finish_reason || 'unknown';
+      const nativeError = data.choices?.[0]?.native_finish_reason || data.error?.message || '';
+      console.warn(`[OpenRouter] Empty response from ${effectiveModel}: finish_reason=${finishReason}, native=${nativeError}, choices=${data.choices?.length || 0}, error=${JSON.stringify(data.error || null)}`);
+    }
+    inputTokens = data.usage?.prompt_tokens || 0;
+    outputTokens = data.usage?.completion_tokens || 0;
   }
 
   return {
     content,
     model: effectiveModel,
     usage: {
-      inputTokens: data.usage?.prompt_tokens || 0,
-      outputTokens: data.usage?.completion_tokens || 0,
-      totalTokens: (data.usage?.prompt_tokens || 0) + (data.usage?.completion_tokens || 0),
+      inputTokens,
+      outputTokens,
+      totalTokens: inputTokens + outputTokens,
     },
     latencyMs: Date.now() - startTime,
     provider: 'openrouter',
+    generationId: generationId || null,
   };
 }
 
@@ -222,6 +236,7 @@ async function callAnthropic(model, systemPrompt, messages, config) {
       content: m.content,
     })),
   };
+  if (config.onToken) body.stream = true;
 
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -241,15 +256,26 @@ async function callAnthropic(model, systemPrompt, messages, config) {
     throw new Error(`Anthropic error: ${res.status} - ${error.error?.message || 'Unknown'}`);
   }
 
-  const data = await res.json();
+  let content, inputTokens, outputTokens;
+  if (config.onToken) {
+    const parsed = await parseSSEStream(res, { onToken: config.onToken, format: 'anthropic' });
+    content = parsed.text || '';
+    inputTokens = parsed.inputTokens || 0;
+    outputTokens = parsed.outputTokens || 0;
+  } else {
+    const data = await res.json();
+    content = data.content?.[0]?.text || '';
+    inputTokens = data.usage?.input_tokens || 0;
+    outputTokens = data.usage?.output_tokens || 0;
+  }
 
   return {
-    content: data.content?.[0]?.text || '',
+    content,
     model: effectiveModel,
     usage: {
-      inputTokens: data.usage?.input_tokens || 0,
-      outputTokens: data.usage?.output_tokens || 0,
-      totalTokens: (data.usage?.input_tokens || 0) + (data.usage?.output_tokens || 0),
+      inputTokens,
+      outputTokens,
+      totalTokens: inputTokens + outputTokens,
     },
     latencyMs: Date.now() - startTime,
     provider: 'anthropic',
@@ -288,6 +314,7 @@ async function callOpenAI(model, systemPrompt, messages, config) {
   if (config.jsonMode) {
     body.response_format = { type: 'json_object' };
   }
+  if (config.onToken) body.stream = true;
 
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
@@ -306,15 +333,26 @@ async function callOpenAI(model, systemPrompt, messages, config) {
     throw new Error(`OpenAI error: ${res.status} - ${error.error?.message || 'Unknown'}`);
   }
 
-  const data = await res.json();
+  let content, inputTokens, outputTokens;
+  if (config.onToken) {
+    const parsed = await parseSSEStream(res, { onToken: config.onToken, format: 'openai' });
+    content = parsed.text || '';
+    inputTokens = parsed.inputTokens || 0;
+    outputTokens = parsed.outputTokens || 0;
+  } else {
+    const data = await res.json();
+    content = data.choices?.[0]?.message?.content || '';
+    inputTokens = data.usage?.prompt_tokens || 0;
+    outputTokens = data.usage?.completion_tokens || 0;
+  }
 
   return {
-    content: data.choices?.[0]?.message?.content || '',
+    content,
     model: effectiveModel,
     usage: {
-      inputTokens: data.usage?.prompt_tokens || 0,
-      outputTokens: data.usage?.completion_tokens || 0,
-      totalTokens: data.usage?.total_tokens || 0,
+      inputTokens,
+      outputTokens,
+      totalTokens: inputTokens + outputTokens,
     },
     latencyMs: Date.now() - startTime,
     provider: 'openai',
@@ -454,6 +492,7 @@ export async function call({
   config = {},
   userId = null,
   promptCategory = null,
+  onToken = null, // Streaming callback for token-by-token output
 }) {
   // Merge preset config with overrides
   const presetConfig = PRESETS[preset] || PRESETS.direct;
@@ -462,6 +501,7 @@ export async function call({
     maxTokens: config.maxTokens ?? presetConfig.maxTokens,
     topP: config.topP ?? presetConfig.topP,
     jsonMode: config.jsonMode ?? false,
+    onToken,
   };
 
   const startTime = Date.now();

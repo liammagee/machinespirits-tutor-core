@@ -23,6 +23,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import * as configLoader from './tutorConfigLoader.js';
 import * as monitoringService from './monitoringService.js';
+import { parseSSEStream } from './sseStreamParser.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1035,6 +1036,7 @@ function extractJsonObject(text) {
  * @param {object} options - Optional: from/to/direction overrides for logging
  */
 async function callAI(agentConfig, systemPrompt, userPrompt, agentRole = 'unknown', options = {}) {
+  const { onToken, ...logOptions } = options;
   const { provider, providerConfig, model, hyperparameters } = agentConfig;
   let { temperature = 0.5, max_tokens = 1500, top_p } = hyperparameters;
 
@@ -1071,6 +1073,9 @@ async function callAI(agentConfig, systemPrompt, userPrompt, agentRole = 'unknow
       bodyParams.top_p = top_p;
     }
 
+    // Enable streaming when onToken callback is provided
+    if (onToken) bodyParams.stream = true;
+
     const res = await fetch(providerConfig.base_url, {
       method: 'POST',
       headers: {
@@ -1086,38 +1091,52 @@ async function callAI(agentConfig, systemPrompt, userPrompt, agentRole = 'unknow
       throw new Error(`Anthropic API error: ${res.status} - ${data?.error?.message || 'Unknown error'}`);
     }
 
-    const data = await res.json();
-    const text = data?.content?.[0]?.text?.trim() || '';
+    let text, inputTokens, outputTokens;
+    if (onToken) {
+      const parsed = await parseSSEStream(res, { onToken, format: 'anthropic' });
+      text = parsed.text?.trim() || '';
+      inputTokens = parsed.inputTokens;
+      outputTokens = parsed.outputTokens;
+    } else {
+      const data = await res.json();
+      text = data?.content?.[0]?.text?.trim() || '';
+      inputTokens = data?.usage?.input_tokens;
+      outputTokens = data?.usage?.output_tokens;
+    }
+
     const result = {
       text,
       model,
       provider,
       latencyMs: Date.now() - startTime,
-      inputTokens: data?.usage?.input_tokens,
-      outputTokens: data?.usage?.output_tokens,
+      inputTokens,
+      outputTokens,
     };
 
-    logApiCall(agentRole, 'anthropic_call', { prompt, response: text, ...result }, options);
+    logApiCall(agentRole, 'anthropic_call', { prompt, response: text, ...result }, logOptions);
     return result;
   }
 
   if (provider === 'openai') {
+    const openaiBody = {
+      model,
+      temperature,
+      max_tokens,
+      top_p,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+    };
+    if (onToken) openaiBody.stream = true;
+
     const res = await fetch(providerConfig.base_url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${providerConfig.apiKey}`,
       },
-      body: JSON.stringify({
-        model,
-        temperature,
-        max_tokens,
-        top_p,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
-        ],
-      }),
+      body: JSON.stringify(openaiBody),
     });
 
     if (!res.ok) {
@@ -1125,22 +1144,45 @@ async function callAI(agentConfig, systemPrompt, userPrompt, agentRole = 'unknow
       throw new Error(`OpenAI API error: ${res.status} - ${data?.error?.message || 'Unknown error'}`);
     }
 
-    const data = await res.json();
-    const text = data?.choices?.[0]?.message?.content?.trim() || '';
+    let text, inputTokens, outputTokens;
+    if (onToken) {
+      const parsed = await parseSSEStream(res, { onToken, format: 'openai' });
+      text = parsed.text?.trim() || '';
+      inputTokens = parsed.inputTokens;
+      outputTokens = parsed.outputTokens;
+    } else {
+      const data = await res.json();
+      text = data?.choices?.[0]?.message?.content?.trim() || '';
+      inputTokens = data?.usage?.prompt_tokens;
+      outputTokens = data?.usage?.completion_tokens;
+    }
+
     const result = {
       text,
       model,
       provider,
       latencyMs: Date.now() - startTime,
-      inputTokens: data?.usage?.prompt_tokens,
-      outputTokens: data?.usage?.completion_tokens,
+      inputTokens,
+      outputTokens,
     };
 
-    logApiCall(agentRole, 'openai_call', { prompt, response: text, ...result }, options);
+    logApiCall(agentRole, 'openai_call', { prompt, response: text, ...result }, logOptions);
     return result;
   }
 
   if (provider === 'openrouter') {
+    const orBody = {
+      model,
+      temperature,
+      max_tokens,
+      top_p,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+    };
+    if (onToken) orBody.stream = true;
+
     const res = await fetch(providerConfig.base_url, {
       method: 'POST',
       headers: {
@@ -1149,16 +1191,7 @@ async function callAI(agentConfig, systemPrompt, userPrompt, agentRole = 'unknow
         'HTTP-Referer': process.env.OPENROUTER_REFERER || 'https://machine-spirits.com',
         'X-Title': 'Machine Spirits Tutor',
       },
-      body: JSON.stringify({
-        model,
-        temperature,
-        max_tokens,
-        top_p,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
-        ],
-      }),
+      body: JSON.stringify(orBody),
     });
 
     if (!res.ok) {
@@ -1166,22 +1199,34 @@ async function callAI(agentConfig, systemPrompt, userPrompt, agentRole = 'unknow
       throw new Error(`OpenRouter API error: ${res.status} - ${data?.error?.message || 'Unknown error'}`);
     }
 
-    const data = await res.json();
-    const text = data?.choices?.[0]?.message?.content?.trim() || '';
+    let text, inputTokens, outputTokens, finishReason, generationId;
+    if (onToken) {
+      const parsed = await parseSSEStream(res, { onToken, format: 'openai' });
+      text = parsed.text?.trim() || '';
+      inputTokens = parsed.inputTokens;
+      outputTokens = parsed.outputTokens;
+    } else {
+      const data = await res.json();
+      text = data?.choices?.[0]?.message?.content?.trim() || '';
+      inputTokens = data?.usage?.prompt_tokens;
+      outputTokens = data?.usage?.completion_tokens;
+      finishReason = data?.choices?.[0]?.finish_reason;
+      generationId = data?.id;
 
-    // Log warning if response is empty (model may have failed silently)
-    if (!text) {
-      console.warn(`[${agentRole}] OpenRouter returned empty content. Full response:`, JSON.stringify({
-        id: data?.id,
-        model: data?.model,
-        choices: data?.choices?.map(c => ({
-          index: c.index,
-          finish_reason: c.finish_reason,
-          content_length: c.message?.content?.length || 0,
-        })),
-        usage: data?.usage,
-        error: data?.error,
-      }, null, 2));
+      // Log warning if response is empty (model may have failed silently)
+      if (!text) {
+        console.warn(`[${agentRole}] OpenRouter returned empty content. Full response:`, JSON.stringify({
+          id: data?.id,
+          model: data?.model,
+          choices: data?.choices?.map(c => ({
+            index: c.index,
+            finish_reason: c.finish_reason,
+            content_length: c.message?.content?.length || 0,
+          })),
+          usage: data?.usage,
+          error: data?.error,
+        }, null, 2));
+      }
     }
 
     const result = {
@@ -1189,19 +1234,19 @@ async function callAI(agentConfig, systemPrompt, userPrompt, agentRole = 'unknow
       model,
       provider,
       latencyMs: Date.now() - startTime,
-      inputTokens: data?.usage?.prompt_tokens,
-      outputTokens: data?.usage?.completion_tokens,
-      finishReason: data?.choices?.[0]?.finish_reason,
-      // OpenRouter-specific: capture generation ID for detailed metrics lookup
-      generationId: data?.id,
+      inputTokens,
+      outputTokens,
+      finishReason,
+      generationId,
     };
 
-    logApiCall(agentRole, 'openrouter_call', { prompt, response: text, ...result }, options);
+    logApiCall(agentRole, 'openrouter_call', { prompt, response: text, ...result }, logOptions);
 
     // Optionally fetch detailed generation metrics (cost, native tokens, etc.)
-    if (data?.id && shouldFetchGenerationDetails()) {
+    // Only available for non-streaming responses that include a generation ID
+    if (generationId && shouldFetchGenerationDetails()) {
       try {
-        const details = await fetchOpenRouterGenerationDetails(data.id, providerConfig.apiKey);
+        const details = await fetchOpenRouterGenerationDetails(generationId, providerConfig.apiKey);
         if (details) {
           result.generationDetails = details;
           result.cost = details.total_cost;
@@ -1239,27 +1284,30 @@ async function callAI(agentConfig, systemPrompt, userPrompt, agentRole = 'unknow
       latencyMs: Date.now() - startTime,
     };
 
-    logApiCall(agentRole, 'gemini_call', { prompt, response: text, ...apiResult }, options);
+    logApiCall(agentRole, 'gemini_call', { prompt, response: text, ...apiResult }, logOptions);
     return apiResult;
   }
 
   if (provider === 'local') {
     // Local LLM provider (LM Studio, Ollama, llama.cpp)
     // Uses OpenAI-compatible API format by default
+    const localBody = {
+      model,
+      temperature,
+      max_tokens,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+    };
+    if (onToken) localBody.stream = true;
+
     const res = await fetch(providerConfig.base_url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        model,
-        temperature,
-        max_tokens,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
-        ],
-      }),
+      body: JSON.stringify(localBody),
     });
 
     if (!res.ok) {
@@ -1267,18 +1315,29 @@ async function callAI(agentConfig, systemPrompt, userPrompt, agentRole = 'unknow
       throw new Error(`Local LLM error: ${res.status} - ${data?.error?.message || 'Is LM Studio running?'}`);
     }
 
-    const data = await res.json();
-    const text = data?.choices?.[0]?.message?.content?.trim() || '';
+    let text, inputTokens, outputTokens;
+    if (onToken) {
+      const parsed = await parseSSEStream(res, { onToken, format: 'openai' });
+      text = parsed.text?.trim() || '';
+      inputTokens = parsed.inputTokens;
+      outputTokens = parsed.outputTokens;
+    } else {
+      const data = await res.json();
+      text = data?.choices?.[0]?.message?.content?.trim() || '';
+      inputTokens = data?.usage?.prompt_tokens;
+      outputTokens = data?.usage?.completion_tokens;
+    }
+
     const result = {
       text,
       model,
       provider,
       latencyMs: Date.now() - startTime,
-      inputTokens: data?.usage?.prompt_tokens,
-      outputTokens: data?.usage?.completion_tokens,
+      inputTokens,
+      outputTokens,
     };
 
-    logApiCall(agentRole, 'local_call', { prompt, response: text, ...result }, options);
+    logApiCall(agentRole, 'local_call', { prompt, response: text, ...result }, logOptions);
     return result;
   }
 
@@ -1389,6 +1448,7 @@ async function egoGenerateSuggestions(learnerContext, curriculumContext, simulat
     learnerId = null, // Phase 1: Writing Pad persistence
     dialecticalNegotiation = false, // Phase 2: AI-powered dialectical struggle
     behavioralOverrides = null, // Quantitative params from superego self-reflection
+    onToken = null, // Streaming callback for token-by-token output
   } = options;
 
   let egoConfig = configLoader.getAgentConfig('ego', profileName);
@@ -1475,7 +1535,7 @@ Respond with ONLY a JSON array containing exactly one suggestion object.`;
     ? `${systemPromptExtension}\n\n${egoConfig.prompt}`
     : egoConfig.prompt;
 
-  const response = await callAI(egoConfig, effectiveSystemPrompt, userPrompt, 'ego');
+  const response = await callAI(egoConfig, effectiveSystemPrompt, userPrompt, 'ego', { onToken });
 
   // Extract JSON from response (handles markdown code blocks)
   let suggestions = extractJsonArray(response.text);
@@ -1491,7 +1551,7 @@ Example format:
 
 ${userPrompt}`;
 
-    const retryResponse = await callAI(egoConfig, egoConfig.prompt, retryUserPrompt, 'ego-retry');
+    const retryResponse = await callAI(egoConfig, egoConfig.prompt, retryUserPrompt, 'ego-retry', { onToken });
     suggestions = extractJsonArray(retryResponse.text);
 
     if (!suggestions) {
@@ -1701,7 +1761,7 @@ function getFallbackConfig(originalConfig) {
  * Superego reviews and critiques Ego's suggestions
  */
 async function superegoReview(egoSuggestions, learnerContext, options = {}) {
-  const { previousFeedback = null, profileName = null, strategy = null, superegoModel = null, superegoPromptExtension = null } = options;
+  const { previousFeedback = null, profileName = null, strategy = null, superegoModel = null, superegoPromptExtension = null, onToken = null } = options;
 
   let superegoConfig = configLoader.getAgentConfig('superego', profileName, { strategy });
   if (!superegoConfig && !superegoModel) {
@@ -1787,7 +1847,7 @@ Respond with ONLY a JSON object in the format specified.`;
     ? `${superegoPromptExtension}\n\n${superegoConfig.prompt}`
     : superegoConfig.prompt;
 
-  const response = await callAI(superegoConfig, effectiveSuperegoPrompt, userPrompt, 'superego');
+  const response = await callAI(superegoConfig, effectiveSuperegoPrompt, userPrompt, 'superego', { onToken });
 
   // No model-swapping fallback: parse failures auto-approve rather than
   // silently switching to a different model (which compromises test integrity)
@@ -1825,7 +1885,7 @@ Respond with ONLY a JSON object in the format specified.`;
  * Ego revises suggestions based on Superego feedback
  */
 async function egoRevise(originalSuggestions, superegoFeedback, learnerContext, curriculumContext, options = {}) {
-  const { profileName = null, from = null, to = null, direction = null, egoModel = null, systemPromptExtension = null } = options;
+  const { profileName = null, from = null, to = null, direction = null, egoModel = null, systemPromptExtension = null, onToken = null } = options;
 
   let egoConfig = configLoader.getAgentConfig('ego', profileName);
   if (!egoConfig) {
@@ -1888,7 +1948,7 @@ Respond with ONLY a JSON array of revised suggestions.`;
     ? `${systemPromptExtension}\n\n${egoConfig.prompt}`
     : egoConfig.prompt;
 
-  const response = await callAI(egoConfig, effectiveSystemPrompt, userPrompt, 'ego-revise', callOptions);
+  const response = await callAI(egoConfig, effectiveSystemPrompt, userPrompt, 'ego-revise', { ...callOptions, onToken });
 
   // Extract JSON from response (handles markdown code blocks)
   const suggestions = extractJsonArray(response.text);
@@ -1990,7 +2050,14 @@ export async function runDialogue(context, options = {}) {
     behavioralOverrides = null, // Quantitative params from superego self-reflection
     _dialogueId = null, // Internal: reuse dialogue ID for multi-turn continuity
     _skipLogging = false, // Internal: skip file logging for multi-turn intermediate steps
+    onStream = null, // Streaming callback: receives { type, agent, round, token, stage }
   } = options;
+
+  // Helper: create an onToken callback for a specific agent/round that fires
+  // through the onStream callback with agent context attached
+  const makeOnToken = (agent, round) => onStream
+    ? (token) => onStream({ type: 'token', agent, round, token })
+    : undefined;
 
   const dialogueConfig = configLoader.getDialogueConfig(profileName);
   const effectiveMaxRounds = maxRounds ?? dialogueConfig.max_rounds ?? 2;
@@ -2192,6 +2259,7 @@ export async function runDialogue(context, options = {}) {
   }
 
   // Step 1: Ego generates initial suggestions
+  onStream?.({ type: 'stage', stage: 'ego_generating', round: 0 });
   const egoInitial = await egoGenerateSuggestions(
     learnerContext,
     curriculumContext,
@@ -2212,8 +2280,10 @@ export async function runDialogue(context, options = {}) {
       learnerId,
       dialecticalNegotiation,
       behavioralOverrides,
+      onToken: makeOnToken('ego', 0),
     }
   );
+  onStream?.({ type: 'complete', agent: 'ego', round: 0 });
   currentSuggestions = egoInitial.suggestions;
 
   if (egoInitial.metrics) {
@@ -2327,11 +2397,13 @@ export async function runDialogue(context, options = {}) {
     }
 
     // Superego reviews
+    onStream?.({ type: 'stage', stage: 'superego_reviewing', round });
     const superegoResult = await superegoReview(
       currentSuggestions,
       learnerContext,
-      { previousFeedback, profileName, strategy: superegoStrategy, superegoModel, superegoPromptExtension }
+      { previousFeedback, profileName, strategy: superegoStrategy, superegoModel, superegoPromptExtension, onToken: makeOnToken('superego', round) }
     );
+    onStream?.({ type: 'complete', agent: 'superego', round });
 
     if (superegoResult.metrics) {
       metrics.totalLatencyMs += superegoResult.metrics.latencyMs || 0;
@@ -2398,13 +2470,15 @@ export async function runDialogue(context, options = {}) {
     if (superegoResult.approved && hasSuggestions) {
       // Ego incorporates the suggestions before final output
       // This is the final step before delivering to user, so mark direction as ego → user
+      onStream?.({ type: 'stage', stage: 'ego_revising', round });
       const egoRevision = await egoRevise(
         currentSuggestions,
         superegoResult,
         learnerContext,
         curriculumContext,
-        { profileName, from: 'ego', to: 'user', direction: 'response', egoModel, systemPromptExtension }
+        { profileName, from: 'ego', to: 'user', direction: 'response', egoModel, systemPromptExtension, onToken: makeOnToken('ego', round) }
       );
+      onStream?.({ type: 'complete', agent: 'ego', round });
       currentSuggestions = egoRevision.suggestions;
 
       if (egoRevision.metrics) {
@@ -2474,6 +2548,7 @@ export async function runDialogue(context, options = {}) {
     }
 
     // Ego revises based on feedback
+    onStream?.({ type: 'stage', stage: 'ego_revising', round });
     previousFeedback = superegoResult.feedback;
     const previousSuggestions = currentSuggestions.map(s => ({ ...s }));
     const egoRevision = await egoRevise(
@@ -2481,8 +2556,9 @@ export async function runDialogue(context, options = {}) {
       superegoResult,
       learnerContext,
       curriculumContext,
-      { profileName, egoModel, systemPromptExtension }
+      { profileName, egoModel, systemPromptExtension, onToken: makeOnToken('ego', round) }
     );
+    onStream?.({ type: 'complete', agent: 'ego', round });
     currentSuggestions = egoRevision.suggestions;
 
     // Convergence threshold: if ego's revision is too similar to previous,

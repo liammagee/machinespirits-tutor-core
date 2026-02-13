@@ -15,6 +15,7 @@ export * as tutorConfigLoader from './services/tutorConfigLoader.js';
 export * as aiService from './services/aiService.js';
 export * as aiConfigService from './services/aiConfigService.js';
 export * as unifiedAIProvider from './services/unifiedAIProviderService.js';
+export * as sseStreamParser from './services/sseStreamParser.js';
 
 // Support Services
 export * as monitoringService from './services/monitoringService.js';
@@ -77,3 +78,5 @@ export {
   getDialecticalContinuity,
   getMilestoneDefinitions
 } from './services/recognitionGamificationService.js';
+
+export { parseSSEStream } from './services/sseStreamParser.js';

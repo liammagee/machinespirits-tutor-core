@@ -94,6 +94,7 @@ export async function generateSuggestions(context, config = {}) {
     superegoPromptExtension = null, // Dynamic disposition adjustments prepended to superego system prompt
     learnerId = null, // For Writing Pad memory persistence between turns
     dialecticalNegotiation = false, // Phase 2: AI-powered dialectical struggle
+    onStream = null, // Streaming callback for token-by-token progress
   } = config;
 
   const startTime = Date.now();
@@ -136,6 +137,7 @@ export async function generateSuggestions(context, config = {}) {
         superegoPromptExtension, // Dynamic disposition adjustments prepended to superego prompt
         learnerId, // Writing Pad memory persistence (Phase 1)
         dialecticalNegotiation, // Phase 2: AI-powered dialectical struggle
+        onStream, // Streaming callback for token-by-token progress
         // Enable trace for transcript/expand mode to ensure complete logging
         trace: trace || dialogueEngine.isTranscriptMode() || dialogueEngine.isExpandMode(),
       }
