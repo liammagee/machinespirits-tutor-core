@@ -168,7 +168,7 @@ async function callOpenRouter(model, systemPrompt, messages, config) {
     throw new Error(`OpenRouter error: ${res.status} - ${error.error?.message || 'Unknown'}`);
   }
 
-  let content, inputTokens, outputTokens, generationId;
+  let content, inputTokens, outputTokens, generationId, cost;
   if (config.onToken) {
     const parsed = await parseSSEStream(res, { onToken: config.onToken, format: 'openai' });
     content = parsed.text || '';
@@ -195,6 +195,7 @@ async function callOpenRouter(model, systemPrompt, messages, config) {
     }
     inputTokens = data.usage?.prompt_tokens || 0;
     outputTokens = data.usage?.completion_tokens || 0;
+    cost = data.usage?.cost || 0;
   }
 
   return {
@@ -204,6 +205,7 @@ async function callOpenRouter(model, systemPrompt, messages, config) {
       inputTokens,
       outputTokens,
       totalTokens: inputTokens + outputTokens,
+      cost: cost || 0,
     },
     latencyMs: Date.now() - startTime,
     provider: 'openrouter',

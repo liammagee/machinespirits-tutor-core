@@ -812,8 +812,8 @@ function formatRawDialogueFile(rawData, dialogueId, timestamp) {
         suggestions: trace.suggestions,
         verdict: trace.verdict,
         preAnalysis: trace.preAnalysis,
-        inputTokens: trace.inputTokens || trace.metrics?.inputTokens || trace.metrics?.nativeTokensPrompt,
-        outputTokens: trace.outputTokens || trace.metrics?.outputTokens || trace.metrics?.nativeTokensCompletion,
+        inputTokens: trace.inputTokens || trace.metrics?.inputTokens,
+        outputTokens: trace.outputTokens || trace.metrics?.outputTokens,
         cost: trace.cost || trace.metrics?.cost,
         // Flow direction fields - critical for dialogue flow visualization
         from: trace.from,

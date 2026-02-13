@@ -103,11 +103,11 @@ function getAgentTarget(fromAgent, hasSuperego) {
 /**
  * Strip bulky fields from metrics before storing in dialogue trace.
  * Keeps token counts, latency, cost, model info — drops the raw LLM
- * response text and verbose generationDetails to avoid 3x duplication.
+ * response text to avoid 3x duplication.
  */
 function trimMetricsForTrace(metrics) {
   if (!metrics) return null;
-  const { text, generationDetails, ...trimmed } = metrics;
+  const { text, ...trimmed } = metrics;
   return trimmed;
 }
 
@@ -547,65 +547,6 @@ const fmt = {
 // ============================================================================
 // OpenRouter Generation Details
 // ============================================================================
-
-/**
- * Whether to fetch detailed generation metrics from OpenRouter
- * Can be controlled via environment variable or logging config
- */
-function shouldFetchGenerationDetails() {
-  // Enable if explicitly set or if detailed logging is enabled
-  if (process.env.OPENROUTER_FETCH_GENERATION_DETAILS === 'true') return true;
-  if (process.env.OPENROUTER_FETCH_GENERATION_DETAILS === 'false') return false;
-
-  // Default: enable for evaluation runs (when logging is enabled)
-  const loggingConfig = configLoader.getLoggingConfig();
-  return loggingConfig.log_api_calls || false;
-}
-
-/**
- * Fetch detailed generation metrics from OpenRouter
- * @param {string} generationId - The generation ID from the initial response
- * @param {string} apiKey - OpenRouter API key
- * @returns {Object|null} Generation details including cost, native tokens, latency
- */
-async function fetchOpenRouterGenerationDetails(generationId, apiKey) {
-  if (!generationId || !apiKey) return null;
-
-  const url = `https://openrouter.ai/api/v1/generation?id=${encodeURIComponent(generationId)}`;
-
-  // Retry with increasing delays - OpenRouter needs time to process generation details
-  const delays = [1000, 2000, 3000];
-
-  for (let i = 0; i < delays.length; i++) {
-    await new Promise(resolve => setTimeout(resolve, delays[i]));
-
-    try {
-      const res = await fetch(url, {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-        },
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        return data?.data || null;
-      }
-
-      // 404 means not ready yet - retry
-      if (res.status === 404 && i < delays.length - 1) {
-        continue;
-      }
-
-      // 404 is common for some models — silently return null
-      return null;
-    } catch (e) {
-      // Silently ignore — generation details are optional metadata
-    }
-  }
-
-  return null;
-}
 
 /**
  * Format a chat-style log message for dialogue visibility
@@ -1199,7 +1140,7 @@ async function callAI(agentConfig, systemPrompt, userPrompt, agentRole = 'unknow
       throw new Error(`OpenRouter API error: ${res.status} - ${data?.error?.message || 'Unknown error'}`);
     }
 
-    let text, inputTokens, outputTokens, finishReason, generationId;
+    let text, inputTokens, outputTokens, finishReason, generationId, cost;
     if (onToken) {
       const parsed = await parseSSEStream(res, { onToken, format: 'openai' });
       text = parsed.text?.trim() || '';
@@ -1212,6 +1153,7 @@ async function callAI(agentConfig, systemPrompt, userPrompt, agentRole = 'unknow
       outputTokens = data?.usage?.completion_tokens;
       finishReason = data?.choices?.[0]?.finish_reason;
       generationId = data?.id;
+      cost = data?.usage?.cost || 0;
 
       // Log warning if response is empty (model may have failed silently)
       if (!text) {
@@ -1238,28 +1180,10 @@ async function callAI(agentConfig, systemPrompt, userPrompt, agentRole = 'unknow
       outputTokens,
       finishReason,
       generationId,
+      cost,
     };
 
     logApiCall(agentRole, 'openrouter_call', { prompt, response: text, ...result }, logOptions);
-
-    // Optionally fetch detailed generation metrics (cost, native tokens, etc.)
-    // Only available for non-streaming responses that include a generation ID
-    if (generationId && shouldFetchGenerationDetails()) {
-      try {
-        const details = await fetchOpenRouterGenerationDetails(generationId, providerConfig.apiKey);
-        if (details) {
-          result.generationDetails = details;
-          result.cost = details.total_cost;
-          result.nativeTokensPrompt = details.native_tokens_prompt;
-          result.nativeTokensCompletion = details.native_tokens_completion;
-          result.providerLatency = details.latency;
-          result.generationTime = details.generation_time;
-        }
-      } catch (e) {
-        // Don't fail the main call if generation details fetch fails
-        console.warn(`[${agentRole}] Failed to fetch generation details:`, e.message);
-      }
-    }
 
     return result;
   }
