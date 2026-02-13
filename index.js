@@ -30,8 +30,14 @@ export * as memoryDynamicsService from './services/memoryDynamicsService.js';
 export * as learnerIntegrationService from './services/learnerIntegrationService.js';
 export * as recognitionGamificationService from './services/recognitionGamificationService.js';
 
+// Recognition Pipeline Orchestrator
+export * as recognitionOrchestrator from './services/recognitionOrchestrator.js';
+
 // Database (for config persistence)
 export * as dbService from './services/dbService.js';
+
+// Database initialization (call before importing other services)
+export { initDb, closeDb, getDb } from './services/dbService.js';
 
 // Re-export commonly used items for convenience
 export {
@@ -54,6 +60,13 @@ export {
   resolveModel,
   listProfiles
 } from './services/tutorConfigLoader.js';
+
+export {
+  processDialogueResult,
+  processWritingEvent,
+  runMaintenance,
+  getFullRecognitionState,
+} from './services/recognitionOrchestrator.js';
 
 export {
   getLearnerRecognitionProfile,
