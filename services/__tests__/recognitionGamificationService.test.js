@@ -9,24 +9,16 @@ import {
 
 let testDb;
 
-// Proxy that delegates all calls to the current testDb instance.
-// This is needed because recognitionGamificationService.js calls `new Database(...)`
-// at module-load time, before beforeEach sets testDb. The proxy defers
-// all property access until the actual test runs.
-const dbProxy = new Proxy({}, {
-  get(_target, prop) {
+// Mock dbService to return our test database
+vi.mock('../dbService.js', () => ({
+  getDb: vi.fn(() => {
     if (!testDb) throw new Error('testDb not initialized - beforeEach has not run yet');
-    const val = testDb[prop];
-    return typeof val === 'function' ? val.bind(testDb) : val;
-  },
-});
-
-// Mock better-sqlite3 to return our proxy
-vi.mock('better-sqlite3', () => {
-  return {
-    default: function Database() { return dbProxy; },
-  };
-});
+    return testDb;
+  }),
+  initDb: vi.fn(),
+  closeDb: vi.fn(),
+  _setDbForTesting: vi.fn(),
+}));
 
 // Mock writingPadService
 vi.mock('../writingPadService.js', () => ({

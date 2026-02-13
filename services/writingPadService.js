@@ -12,29 +12,8 @@
  * Phase 1 of Recognition Engine
  */
 
-import Database from 'better-sqlite3';
 import { randomBytes } from 'crypto';
-import { readFileSync } from 'fs';
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
-const db = new Database('./data/writing-pads.db');
-
-// Enable foreign keys
-db.pragma('foreign_keys = ON');
-
-// Initialize database schema
-const migrationPath = join(__dirname, '../migrations/008_writing_pad_schema.sql');
-try {
-  const migration = readFileSync(migrationPath, 'utf-8');
-  db.exec(migration);
-  console.log('[WritingPad] Database initialized');
-} catch (error) {
-  console.error('[WritingPad] Failed to initialize database:', error.message);
-}
+import { getDb } from './dbService.js';
 
 // ============================================================================
 // Writing Pad Management
@@ -54,7 +33,7 @@ export function initializeWritingPad(learnerId) {
 
   const id = `pad-${Date.now()}-${randomBytes(4).toString('hex')}`;
 
-  const stmt = db.prepare(`
+  const stmt = getDb().prepare(`
     INSERT INTO writing_pads (id, learner_id, conscious_state, preconscious_state, unconscious_state)
     VALUES (?, ?, ?, ?, ?)
   `);
@@ -100,7 +79,7 @@ export function initializeWritingPad(learnerId) {
  * @returns {object|null} - Writing pad object or null
  */
 export function getWritingPad(learnerId) {
-  const stmt = db.prepare('SELECT * FROM writing_pads WHERE learner_id = ?');
+  const stmt = getDb().prepare('SELECT * FROM writing_pads WHERE learner_id = ?');
   const row = stmt.get(learnerId);
 
   if (!row) return null;
@@ -151,7 +130,7 @@ export function updateConscious(learnerId, updates) {
     lastUpdated: new Date().toISOString(),
   };
 
-  const stmt = db.prepare(`
+  const stmt = getDb().prepare(`
     UPDATE writing_pads
     SET conscious_state = ?, updated_at = CURRENT_TIMESTAMP
     WHERE learner_id = ?
@@ -191,7 +170,7 @@ export function updateUnconscious(learnerId, updates) {
     lastUpdated: new Date().toISOString(),
   };
 
-  const stmt = db.prepare(`
+  const stmt = getDb().prepare(`
     UPDATE writing_pads
     SET unconscious_state = ?, updated_at = CURRENT_TIMESTAMP
     WHERE learner_id = ?
@@ -250,7 +229,7 @@ export function promoteToPreconscious(learnerId, pattern) {
     recentPatterns: newPatterns,
   };
 
-  const stmt = db.prepare(`
+  const stmt = getDb().prepare(`
     UPDATE writing_pads
     SET preconscious_state = ?, updated_at = CURRENT_TIMESTAMP
     WHERE learner_id = ?
@@ -293,7 +272,7 @@ export function settleToUnconscious(learnerId, recognitionMoment) {
     ],
   };
 
-  const stmt = db.prepare(`
+  const stmt = getDb().prepare(`
     UPDATE writing_pads
     SET unconscious_state = ?,
         total_recognition_moments = total_recognition_moments + 1,
@@ -304,7 +283,7 @@ export function settleToUnconscious(learnerId, recognitionMoment) {
   stmt.run(JSON.stringify(newUnconscious), learnerId);
 
   // Mark recognition moment as consolidated to unconscious
-  db.prepare(`
+  getDb().prepare(`
     UPDATE recognition_moments
     SET persistence_layer = 'unconscious', consolidated_at = CURRENT_TIMESTAMP
     WHERE id = ?
@@ -372,7 +351,7 @@ export function forgetStalePatterns(learnerId) {
       recentPatterns: activePatterns,
     };
 
-    const stmt = db.prepare(`
+    const stmt = getDb().prepare(`
       UPDATE writing_pads
       SET preconscious_state = ?, updated_at = CURRENT_TIMESTAMP
       WHERE learner_id = ?
@@ -407,7 +386,7 @@ export function createRecognitionMoment(moment) {
 
   const id = `recog-${Date.now()}-${randomBytes(4).toString('hex')}`;
 
-  const stmt = db.prepare(`
+  const stmt = getDb().prepare(`
     INSERT INTO recognition_moments (
       id, writing_pad_id, session_id, created_at,
       thesis_agent, thesis_position, thesis_reasoning,
@@ -427,7 +406,7 @@ export function createRecognitionMoment(moment) {
     `Principle: ${ghostDemand.principle}`,         // thesis_reasoning
     'learner',                                      // antithesis_agent
     learnerNeed.need || '',                         // antithesis_position
-    `Intensity: ${learnerNeed.intensity.toFixed(2)}`, // antithesis_reasoning
+    `Intensity: ${(learnerNeed.intensity ?? 0).toFixed(2)}`, // antithesis_reasoning
     synthesis.synthesis || '',                      // synthesis_resolution
     JSON.stringify(ghostDemand),                    // ghost_demand
     JSON.stringify(learnerNeed),                    // learner_need
@@ -447,7 +426,7 @@ export function createRecognitionMoment(moment) {
  * @returns {object|null} - Recognition moment or null
  */
 export function getRecognitionMoment(id) {
-  const stmt = db.prepare('SELECT * FROM recognition_moments WHERE id = ?');
+  const stmt = getDb().prepare('SELECT * FROM recognition_moments WHERE id = ?');
   const row = stmt.get(id);
 
   if (!row) return null;
@@ -486,7 +465,7 @@ export function getRecognitionMoments(writingPadId, options = {}) {
   query += ' ORDER BY created_at DESC LIMIT ?';
   params.push(limit);
 
-  const stmt = db.prepare(query);
+  const stmt = getDb().prepare(query);
   const rows = stmt.all(...params);
 
   return rows.map(row => ({

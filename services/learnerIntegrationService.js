@@ -13,11 +13,9 @@
  * Based on: RECOGNITION-ENGINE.md Phase 3
  */
 
-import Database from 'better-sqlite3';
 import { randomBytes } from 'crypto';
 import * as writingPadService from './writingPadService.js';
-
-const db = new Database('./data/writing-pads.db');
+import { getDb } from './dbService.js';
 
 /**
  * Detect resistance from learner behavior
@@ -297,7 +295,7 @@ export function recordLearnerEvent(options) {
 
   const id = `learner-event-${Date.now()}-${randomBytes(4).toString('hex')}`;
 
-  const stmt = db.prepare(`
+  const stmt = getDb().prepare(`
     INSERT INTO learner_recognition_events (
       id, learner_id, writing_pad_id, session_id, event_type,
       tutor_suggestion, learner_response, resistance_interpretation,
@@ -330,7 +328,7 @@ export function recordLearnerEvent(options) {
  * Get learner recognition event by ID
  */
 export function getLearnerEvent(eventId) {
-  const stmt = db.prepare('SELECT * FROM learner_recognition_events WHERE id = ?');
+  const stmt = getDb().prepare('SELECT * FROM learner_recognition_events WHERE id = ?');
   const row = stmt.get(eventId);
 
   if (!row) return null;
@@ -380,7 +378,7 @@ export function getLearnerEvents(learnerId, options = {}) {
   query += ' ORDER BY created_at DESC LIMIT ?';
   params.push(limit);
 
-  const stmt = db.prepare(query);
+  const stmt = getDb().prepare(query);
   const rows = stmt.all(...params);
 
   return rows.map(row => ({

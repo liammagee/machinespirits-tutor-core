@@ -12,10 +12,8 @@
  * Phase 5 of Recognition Engine (v0.4.0)
  */
 
-import Database from 'better-sqlite3';
 import * as writingPadService from './writingPadService.js';
-
-const db = new Database('./data/writing-pads.db');
+import { getDb } from './dbService.js';
 
 // ============================================================================
 // Recognition Milestone Definitions
@@ -94,12 +92,12 @@ export function computeRecognitionDepth(learnerId) {
   const { dialecticalDepth, mutualTransformationScore, pedagogicalAttunement } = pad.metrics;
 
   // Compute breakthrough density from learner events
-  const breakthroughEvents = db.prepare(
+  const breakthroughEvents = getDb().prepare(
     `SELECT COUNT(*) as count FROM learner_recognition_events
      WHERE learner_id = ? AND event_type = 'breakthrough'`
   ).get(learnerId);
 
-  const totalEvents = db.prepare(
+  const totalEvents = getDb().prepare(
     `SELECT COUNT(*) as count FROM learner_recognition_events
      WHERE learner_id = ?`
   ).get(learnerId);
@@ -135,14 +133,14 @@ export function computeRecognitionDepth(learnerId) {
  * @returns {'rising'|'falling'|'stable'|'none'}
  */
 function computeDepthTrend(learnerId, writingPadId) {
-  const recentMoments = db.prepare(
+  const recentMoments = getDb().prepare(
     `SELECT struggle_depth, mutual_acknowledgment, transformative
      FROM recognition_moments
      WHERE writing_pad_id = ?
      ORDER BY created_at DESC LIMIT 5`
   ).all(writingPadId);
 
-  const olderMoments = db.prepare(
+  const olderMoments = getDb().prepare(
     `SELECT struggle_depth, mutual_acknowledgment, transformative
      FROM recognition_moments
      WHERE writing_pad_id = ?
@@ -181,7 +179,7 @@ export function checkRecognitionMilestones(learnerId) {
   const results = [];
 
   // first_negation: First recognition_type = 'existential' moment
-  const firstExistential = db.prepare(
+  const firstExistential = getDb().prepare(
     `SELECT created_at FROM recognition_moments
      WHERE writing_pad_id = ? AND recognition_type = 'existential'
      ORDER BY created_at ASC LIMIT 1`
@@ -194,7 +192,7 @@ export function checkRecognitionMilestones(learnerId) {
   });
 
   // productive_resistance: First resistance_interpretation = 'productive' event
-  const firstProductive = db.prepare(
+  const firstProductive = getDb().prepare(
     `SELECT created_at FROM learner_recognition_events
      WHERE learner_id = ? AND resistance_interpretation = 'productive'
      ORDER BY created_at ASC LIMIT 1`
@@ -207,7 +205,7 @@ export function checkRecognitionMilestones(learnerId) {
   });
 
   // mutual_transformation: First mutual_acknowledgment = TRUE moment
-  const firstMutual = db.prepare(
+  const firstMutual = getDb().prepare(
     `SELECT created_at FROM recognition_moments
      WHERE writing_pad_id = ? AND mutual_acknowledgment = 1
      ORDER BY created_at ASC LIMIT 1`
@@ -220,7 +218,7 @@ export function checkRecognitionMilestones(learnerId) {
   });
 
   // memory_consolidation: First persistence_layer = 'unconscious' moment
-  const firstUnconscious = db.prepare(
+  const firstUnconscious = getDb().prepare(
     `SELECT created_at, consolidated_at FROM recognition_moments
      WHERE writing_pad_id = ? AND persistence_layer = 'unconscious'
      ORDER BY consolidated_at ASC LIMIT 1`
@@ -245,7 +243,7 @@ export function checkRecognitionMilestones(learnerId) {
   });
 
   // dialectical_mastery: dialectical_depth > 0.7 across 5+ sessions
-  const highDepthSessions = db.prepare(
+  const highDepthSessions = getDb().prepare(
     `SELECT COUNT(DISTINCT session_id) as count FROM recognition_moments
      WHERE writing_pad_id = ? AND session_id IS NOT NULL`
   ).get(pad.id);
@@ -260,7 +258,7 @@ export function checkRecognitionMilestones(learnerId) {
   });
 
   // metacognitive_awakening: 3+ recognition_type = 'metacognitive' moments
-  const metacognitiveCount = db.prepare(
+  const metacognitiveCount = getDb().prepare(
     `SELECT COUNT(*) as count FROM recognition_moments
      WHERE writing_pad_id = ? AND recognition_type = 'metacognitive'`
   ).get(pad.id);
@@ -275,7 +273,7 @@ export function checkRecognitionMilestones(learnerId) {
   });
 
   // synthesis_achieved: First synthesis_strategy = 'dialectical_synthesis'
-  const firstSynthesis = db.prepare(
+  const firstSynthesis = getDb().prepare(
     `SELECT created_at FROM recognition_moments
      WHERE writing_pad_id = ? AND synthesis_strategy = 'dialectical_synthesis'
      ORDER BY created_at ASC LIMIT 1`
@@ -369,7 +367,7 @@ export function getMemoryLayerProgression(learnerId) {
  */
 function getRecentTransitions(writingPadId) {
   // Find moments that have been consolidated (transitioned to unconscious)
-  const consolidated = db.prepare(
+  const consolidated = getDb().prepare(
     `SELECT id, created_at, consolidated_at, persistence_layer, synthesis_resolution
      FROM recognition_moments
      WHERE writing_pad_id = ? AND consolidated_at IS NOT NULL
@@ -418,7 +416,7 @@ export function computeRecognitionFlow(learnerId, sessionId) {
     params.push(sessionId);
   } else {
     // Get the most recent session
-    const latestSession = db.prepare(
+    const latestSession = getDb().prepare(
       `SELECT session_id FROM recognition_moments
        WHERE writing_pad_id = ? AND session_id IS NOT NULL
        ORDER BY created_at DESC LIMIT 1`
@@ -431,7 +429,7 @@ export function computeRecognitionFlow(learnerId, sessionId) {
   }
 
   query += ' ORDER BY created_at ASC';
-  const moments = db.prepare(query).all(...params);
+  const moments = getDb().prepare(query).all(...params);
 
   if (moments.length === 0) {
     return {
@@ -452,7 +450,7 @@ export function computeRecognitionFlow(learnerId, sessionId) {
   const synthesisBalance = moments.length > 0 ? synthesisMoments / moments.length : 0;
 
   // Resistance productivity from session events
-  const sessionEvents = db.prepare(
+  const sessionEvents = getDb().prepare(
     `SELECT * FROM learner_recognition_events
      WHERE learner_id = ? AND event_type = 'resistance'
      ${sessionId ? 'AND session_id = ?' : ''}
@@ -514,7 +512,7 @@ export function getDialecticalContinuity(learnerId) {
   }
 
   // Get all sessions and whether they had recognition moments
-  const sessions = db.prepare(
+  const sessions = getDb().prepare(
     `SELECT session_id, COUNT(*) as moment_count, MIN(created_at) as first_moment
      FROM recognition_moments
      WHERE writing_pad_id = ? AND session_id IS NOT NULL
@@ -525,7 +523,7 @@ export function getDialecticalContinuity(learnerId) {
   const sessionsWithRecognition = sessions.length;
 
   // For sessionsWithout, we need total sessions. Estimate from events.
-  const allSessionIds = db.prepare(
+  const allSessionIds = getDb().prepare(
     `SELECT DISTINCT session_id FROM learner_recognition_events
      WHERE learner_id = ? AND session_id IS NOT NULL
      UNION
