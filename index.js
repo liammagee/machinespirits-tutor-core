@@ -80,3 +80,5 @@ export {
 } from './services/recognitionGamificationService.js';
 
 export { parseSSEStream } from './services/sseStreamParser.js';
+
+export { callStream } from './services/unifiedAIProviderService.js';

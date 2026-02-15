@@ -439,6 +439,79 @@ async function callGemini(model, systemPrompt, messages, config) {
   };
 }
 
+/**
+ * Call a local OpenAI-compatible API (LM Studio, Ollama, etc.)
+ * @private
+ */
+async function callLocal(model, systemPrompt, messages, config) {
+  const startTime = Date.now();
+
+  const baseUrl = process.env.LOCAL_AI_URL || 'http://localhost:1234';
+  // Normalize: strip trailing slash, ensure /v1/chat/completions
+  const endpoint = baseUrl.replace(/\/+$/, '').replace(/\/v1\/chat\/completions$/, '')
+    + '/v1/chat/completions';
+
+  const effectiveModel = model || 'local-model';
+
+  const sanitizedMessages = sanitizeMessages(messages);
+  const body = {
+    model: effectiveModel,
+    temperature: config.temperature ?? 0.7,
+    max_tokens: config.maxTokens || 1000,
+    messages: [
+      { role: 'system', content: sanitizeText(systemPrompt) },
+      ...sanitizedMessages.map(m => ({
+        role: m.role === 'user' ? 'user' : 'assistant',
+        content: m.content,
+      })),
+    ],
+  };
+  if (config.onToken) body.stream = true;
+
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({}));
+    const msg = error.error?.message || error.message || 'Unknown';
+    // Surface "no models loaded" as a specific code
+    if (msg.toLowerCase().includes('no models loaded') || msg.toLowerCase().includes('no model')) {
+      const err = new Error(`Local AI has no models loaded. Load a model in the developer page or run "lms load".`);
+      err.code = 'LOCAL_AI_NO_MODEL';
+      throw err;
+    }
+    throw new Error(`Local AI error: ${res.status} - ${msg}`);
+  }
+
+  let content, inputTokens, outputTokens;
+  if (config.onToken) {
+    const parsed = await parseSSEStream(res, { onToken: config.onToken, format: 'openai' });
+    content = parsed.text || '';
+    inputTokens = parsed.inputTokens || 0;
+    outputTokens = parsed.outputTokens || 0;
+  } else {
+    const data = await res.json();
+    content = data.choices?.[0]?.message?.content || '';
+    inputTokens = data.usage?.prompt_tokens || 0;
+    outputTokens = data.usage?.completion_tokens || 0;
+  }
+
+  return {
+    content,
+    model: effectiveModel,
+    usage: {
+      inputTokens,
+      outputTokens,
+      totalTokens: inputTokens + outputTokens,
+    },
+    latencyMs: Date.now() - startTime,
+    provider: 'local',
+  };
+}
+
 // ============================================================================
 // Provider Dispatcher
 // ============================================================================
@@ -450,6 +523,8 @@ const PROVIDER_MAP = {
   openai: callOpenAI,
   gemini: callGemini,
   google: callGemini,  // alias
+  local: callLocal,
+  lmstudio: callLocal,  // alias
 };
 
 /**
@@ -625,11 +700,328 @@ export function getProviderStatus() {
     };
   }
 
+  // Local provider is always "configured" (no API key needed)
+  status.local = {
+    configured: true,
+    model: 'local-model',
+    baseUrl: process.env.LOCAL_AI_URL || 'http://localhost:1234',
+  };
+
   return status;
+}
+
+// ============================================================================
+// Streaming API (async generator)
+// ============================================================================
+
+/**
+ * Yield raw SSE events from a fetch Response body as an async generator.
+ * @param {Response} response - fetch Response with streaming body
+ * @yields {{event: string, data: string}} Raw SSE event objects
+ * @private
+ */
+async function* iterateSSE(response) {
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let currentEvent = '';
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed === '') {
+          currentEvent = '';
+          continue;
+        }
+        if (trimmed.startsWith('event:')) {
+          currentEvent = trimmed.slice(6).trim();
+          continue;
+        }
+        if (trimmed.startsWith('data:')) {
+          const dataStr = trimmed.slice(5).trim();
+          if (dataStr === '[DONE]') continue;
+          yield { event: currentEvent, data: dataStr };
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+/**
+ * Build a streaming fetch request for a given provider and return the Response.
+ * @private
+ */
+async function buildStreamRequest(provider, model, systemPrompt, messages, config) {
+  const normalizedProvider = provider?.toLowerCase() || getAvailableProvider();
+  const sanitizedMessages = sanitizeMessages(messages);
+
+  switch (normalizedProvider) {
+    case 'openrouter': {
+      const apiKey = getApiKey('openrouter');
+      if (!apiKey) throw new Error('OpenRouter API key missing. Set OPENROUTER_API_KEY.');
+      const effectiveModel = model && model.includes('/') ? model : getDefaultModel('openrouter');
+      return {
+        response: await fetch('https://openrouter.ai/api/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${apiKey}`,
+            'HTTP-Referer': process.env.OPENROUTER_REFERER || 'https://machinespirits.org',
+            'X-Title': 'Machine Spirits',
+          },
+          body: JSON.stringify({
+            model: effectiveModel,
+            max_tokens: config.maxTokens || 1000,
+            temperature: config.temperature ?? 0.7,
+            stream: true,
+            messages: [
+              { role: 'system', content: sanitizeText(systemPrompt) },
+              ...sanitizedMessages.map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.content })),
+            ],
+          }),
+        }),
+        format: 'openai',
+        model: effectiveModel,
+        provider: 'openrouter',
+      };
+    }
+
+    case 'anthropic':
+    case 'claude': {
+      const apiKey = getApiKey('claude');
+      if (!apiKey) throw new Error('Anthropic API key missing. Set ANTHROPIC_API_KEY.');
+      const effectiveModel = model || getDefaultModel('claude');
+      return {
+        response: await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+          },
+          body: JSON.stringify({
+            model: effectiveModel,
+            max_tokens: config.maxTokens || 1000,
+            temperature: config.temperature ?? 0.5,
+            stream: true,
+            system: sanitizeText(systemPrompt),
+            messages: sanitizedMessages.map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.content })),
+          }),
+        }),
+        format: 'anthropic',
+        model: effectiveModel,
+        provider: 'anthropic',
+      };
+    }
+
+    case 'openai': {
+      const apiKey = getApiKey('openai');
+      if (!apiKey) throw new Error('OpenAI API key missing. Set OPENAI_API_KEY.');
+      const effectiveModel = model || getDefaultModel('openai');
+      return {
+        response: await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            model: effectiveModel,
+            max_completion_tokens: config.maxTokens || 1000,
+            temperature: config.temperature ?? 0.5,
+            stream: true,
+            messages: [
+              { role: 'system', content: sanitizeText(systemPrompt) },
+              ...sanitizedMessages.map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.content })),
+            ],
+          }),
+        }),
+        format: 'openai',
+        model: effectiveModel,
+        provider: 'openai',
+      };
+    }
+
+    case 'gemini':
+    case 'google': {
+      const apiKey = getApiKey('gemini');
+      if (!apiKey) throw new Error('Gemini API key missing. Set GEMINI_API_KEY.');
+      const effectiveModel = model || getDefaultModel('gemini');
+      const contents = sanitizedMessages.map(m => ({
+        role: m.role === 'user' ? 'user' : 'model',
+        parts: [{ text: m.content }],
+      }));
+      if (systemPrompt) {
+        contents.unshift({ role: 'user', parts: [{ text: `[System Instructions]\n${sanitizeText(systemPrompt)}\n\n[End System Instructions]` }] });
+        contents.splice(1, 0, { role: 'model', parts: [{ text: 'I understand and will follow these instructions.' }] });
+      }
+      return {
+        response: await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${effectiveModel}:streamGenerateContent?alt=sse&key=${apiKey}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents,
+              generationConfig: {
+                temperature: config.temperature ?? 0.5,
+                maxOutputTokens: config.maxTokens || 1000,
+                topP: config.topP ?? 0.9,
+              },
+            }),
+          }
+        ),
+        format: 'gemini',
+        model: effectiveModel,
+        provider: 'gemini',
+      };
+    }
+
+    case 'local':
+    case 'lmstudio': {
+      const baseUrl = process.env.LOCAL_AI_URL || 'http://localhost:1234';
+      const endpoint = baseUrl.replace(/\/+$/, '').replace(/\/v1\/chat\/completions$/, '') + '/v1/chat/completions';
+      const effectiveModel = model || 'local-model';
+      return {
+        response: await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: effectiveModel,
+            temperature: config.temperature ?? 0.7,
+            max_tokens: config.maxTokens || 1000,
+            stream: true,
+            messages: [
+              { role: 'system', content: sanitizeText(systemPrompt) },
+              ...sanitizedMessages.map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.content })),
+            ],
+          }),
+        }),
+        format: 'openai',
+        model: effectiveModel,
+        provider: 'local',
+      };
+    }
+
+    default:
+      throw new Error(`Unknown provider for streaming: ${normalizedProvider}`);
+  }
+}
+
+/**
+ * Stream an LLM response as an async generator yielding normalized chunks.
+ *
+ * Chunk types:
+ *   { type: 'text_delta', content: '...' }
+ *   { type: 'done', content: 'full text', usage: {...}, latencyMs, provider, model }
+ *
+ * @param {Object} options - Same as call() options
+ * @yields {{type: string, content: string, usage?: Object, latencyMs?: number, provider?: string, model?: string}}
+ */
+export async function* callStream({
+  provider,
+  model,
+  systemPrompt,
+  messages,
+  preset = 'direct',
+  config = {},
+}) {
+  const presetConfig = PRESETS[preset] || PRESETS.direct;
+  const finalConfig = {
+    temperature: config.temperature ?? presetConfig.temperature,
+    maxTokens: config.maxTokens ?? presetConfig.maxTokens,
+    topP: config.topP ?? presetConfig.topP,
+  };
+
+  const startTime = Date.now();
+  const { response, format, model: effectiveModel, provider: effectiveProvider } =
+    await buildStreamRequest(provider, model, systemPrompt, messages, finalConfig);
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(`${effectiveProvider} streaming error: ${response.status} - ${error.error?.message || 'Unknown'}`);
+  }
+
+  const chunks = [];
+  let inputTokens = 0;
+  let outputTokens = 0;
+
+  for await (const { event, data } of iterateSSE(response)) {
+    let parsed;
+    try {
+      parsed = JSON.parse(data);
+    } catch {
+      continue;
+    }
+
+    let token = null;
+
+    if (format === 'anthropic') {
+      // Anthropic: content_block_delta events carry text
+      if (event === 'content_block_delta' && parsed?.delta?.text) {
+        token = parsed.delta.text;
+      }
+      // Usage from message_start / message_delta
+      if (event === 'message_start' && parsed?.message?.usage) {
+        inputTokens = parsed.message.usage.input_tokens || 0;
+      }
+      if (event === 'message_delta' && parsed?.usage) {
+        outputTokens = parsed.usage.output_tokens || 0;
+      }
+    } else if (format === 'gemini') {
+      // Gemini: each chunk has candidates[0].content.parts[0].text
+      const text = parsed?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (text) token = text;
+      // Usage metadata
+      if (parsed?.usageMetadata) {
+        inputTokens = parsed.usageMetadata.promptTokenCount || inputTokens;
+        outputTokens = parsed.usageMetadata.candidatesTokenCount || outputTokens;
+      }
+    } else {
+      // OpenAI-compatible (openai, openrouter, local)
+      const content = parsed?.choices?.[0]?.delta?.content;
+      if (content) token = content;
+      // Some providers include usage in final chunk
+      if (parsed?.usage) {
+        inputTokens = parsed.usage.prompt_tokens || inputTokens;
+        outputTokens = parsed.usage.completion_tokens || outputTokens;
+      }
+    }
+
+    if (token) {
+      chunks.push(token);
+      yield { type: 'text_delta', content: token };
+    }
+  }
+
+  const fullText = chunks.join('');
+  yield {
+    type: 'done',
+    content: fullText,
+    usage: {
+      inputTokens,
+      outputTokens,
+      totalTokens: inputTokens + outputTokens,
+    },
+    latencyMs: Date.now() - startTime,
+    provider: effectiveProvider,
+    model: effectiveModel,
+  };
 }
 
 export default {
   call,
+  callStream,
   createCallFactory,
   generateText,
   getAvailableProvider,
