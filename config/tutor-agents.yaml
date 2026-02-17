@@ -299,6 +299,22 @@ profiles:
       retry_frustration_count: 3
 
   # Budget: Single-agent with Nemotron (free tier) on OpenRouter
+  naive:
+    description: "Naive baseline - minimal prompt with JSON schema only, no pedagogical guidance"
+    dialogue:
+      enabled: false
+      max_rounds: 0
+
+    ego:
+      provider: openrouter
+      model: haiku
+      prompt_file: tutor-ego-naive.md
+      hyperparameters:
+        temperature: 0.6
+        max_tokens: 8000
+
+    superego: null
+
   budget:
     description: "Budget-friendly single agent - DeepSeek (free) via OpenRouter, no dialogue"
     dialogue:
