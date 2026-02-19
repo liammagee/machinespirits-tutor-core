@@ -24,6 +24,7 @@ import { fileURLToPath } from 'url';
 import * as configLoader from './tutorConfigLoader.js';
 import * as monitoringService from './monitoringService.js';
 import { parseSSEStream } from './sseStreamParser.js';
+import { jsonrepair } from 'jsonrepair';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1630,13 +1631,28 @@ async function parseJsonWithFallback(text, pattern, retryFn, context) {
     const parsed = JSON.parse(jsonStr);
     return { parsed, retried: false, rawResponse: text };
   } catch (e) {
-    if (!isTranscriptMode()) {
-      console.warn(`[${context}] Failed to parse JSON: ${e.message}`);
-      console.log(`[${context}] Retrying with stronger model...`);
+    // Try jsonrepair before falling back to model retry — handles trailing commas,
+    // unescaped quotes, control characters, and other common LLM JSON malformations.
+    try {
+      const repaired = jsonrepair(jsonStr);
+      const parsed = JSON.parse(repaired);
+      if (!isTranscriptMode()) {
+        console.debug(`[${context}] JSON repaired successfully`);
+      }
+      return { parsed, retried: false, rawResponse: text };
+    } catch {
+      // jsonrepair couldn't fix it — fall through to model retry
     }
 
-    // Retry with fallback
+    if (!isTranscriptMode()) {
+      console.warn(`[${context}] Failed to parse JSON: ${e.message}`);
+    }
+
+    // Retry with fallback model
     if (retryFn) {
+      if (!isTranscriptMode()) {
+        console.log(`[${context}] Retrying with stronger model...`);
+      }
       try {
         const retryResponse = await retryFn();
         const retryStr = extractJson(retryResponse.text);
