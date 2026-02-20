@@ -1,7 +1,7 @@
 # Shared AI Provider Configuration
 # Used by both tutor-agents.yaml and evaluation-rubric.yaml
 #
-# Model IDs are current as of January 2025. Update when new models release.
+# Model IDs are current as of February 2026. Update when new models release.
 
 providers:
   anthropic:
@@ -11,7 +11,7 @@ providers:
     models:
       haiku: claude-haiku-4-5
       sonnet: claude-sonnet-4-5
-      opus: claude-opus-4-5
+      opus: claude-opus-4-6
 
   openai:
     api_key_env: OPENAI_API_KEY
@@ -24,23 +24,28 @@ providers:
   openrouter:
     api_key_env: OPENROUTER_API_KEY
     base_url: https://openrouter.ai/api/v1/chat/completions
-    default_model: nvidia/nemotron-3-nano-30b-a3b:free
+    default_model: nvidia/nemotron-3-nano-30b-a3b
+    # default_model: nvidia/nemotron-3-nano-30b-a3b:free
     models:
-      # Budget-friendly options (free tier)
-      nemotron: nvidia/nemotron-3-nano-30b-a3b:free
+      # Budget-friendly options
+      nemotron: nvidia/nemotron-3-nano-30b-a3b
+      # nemotron: nvidia/nemotron-3-nano-30b-a3b:free
       glm47: z-ai/glm-4.7
+      glm5: z-ai/glm-5
       kimi-k2: moonshotai/kimi-k2-thinking
       "kimi-k2.5": moonshotai/kimi-k2.5
       deepseek: deepseek/deepseek-v3.2
-      minimax: minimax/minimax-m2.1ate
+      minimax: minimax/minimax-m2.5
       haiku: anthropic/claude-haiku-4.5
       gpt-oss: openai/gpt-oss-120b
+      qwen3.5-plus: qwen/qwen3.5-plus-02-15
+      qwen3.5: qwen/qwen3.5-397b-a17b
       # Mid-tier options
-      sonnet: anthropic/claude-sonnet-4.5
+      sonnet: anthropic/claude-sonnet-4.6
       gpt-mini: openai/gpt-5-mini
       gemini-flash: google/gemini-3-flash-preview
       # Premium options
-      opus: anthropic/claude-opus-4.5
+      opus: anthropic/claude-opus-4.6
       gpt: openai/gpt-5.2
       gemini-pro: google/gemini-3-pro-preview
 
