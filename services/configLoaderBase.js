@@ -25,25 +25,104 @@ const PROMPTS_DIR = path.join(ROOT_DIR, 'prompts');
 let sharedProvidersCache = null;
 let sharedProvidersMtime = null;
 
+// Client config overlay (registered by consuming repos like eval-repo)
+let clientConfigDir = null;
+let clientProvidersMtime = null;
+
 /**
- * Load providers from shared providers.yaml
+ * Deep-merge two provider objects: client overrides core defaults.
+ *
+ * Per-provider: client fields override core fields.
+ * `models` sub-object is merged additively (client models override/extend core models).
+ *
+ * @param {Object} core - Core providers from tutor-core
+ * @param {Object} client - Client provider overrides
+ * @returns {Object} Merged providers
+ */
+function deepMergeProviders(core, client) {
+  const merged = { ...core };
+  for (const [providerName, clientProvider] of Object.entries(client)) {
+    const coreProvider = merged[providerName];
+    if (!coreProvider) {
+      // New provider from client — add as-is
+      merged[providerName] = clientProvider;
+    } else {
+      // Merge: client fields override core, models merged additively
+      merged[providerName] = {
+        ...coreProvider,
+        ...clientProvider,
+        models: { ...coreProvider.models, ...clientProvider.models },
+      };
+    }
+  }
+  return merged;
+}
+
+/**
+ * Register a client config directory for provider overlay.
+ *
+ * When registered, loadProviders() reads both the core providers.yaml
+ * and the client's providers.yaml, deep-merging them (client wins).
+ *
+ * @param {string} dirPath - Absolute path to client config directory
+ */
+export function registerClientConfigDir(dirPath) {
+  clientConfigDir = dirPath;
+  // Invalidate caches so next loadProviders() re-merges
+  sharedProvidersCache = null;
+  sharedProvidersMtime = null;
+  clientProvidersMtime = null;
+}
+
+/**
+ * Load providers from shared providers.yaml, with optional client overlay.
+ *
+ * If a client config dir has been registered via registerClientConfigDir(),
+ * providers from both files are deep-merged (client overrides core defaults).
+ *
  * @param {boolean} forceReload - Force reload from disk
  * @returns {Object} Providers configuration
  */
 export function loadProviders(forceReload = false) {
-  const providersPath = path.join(CONFIG_DIR, 'providers.yaml');
+  const coreProvidersPath = path.join(CONFIG_DIR, 'providers.yaml');
 
   try {
-    const stats = fs.statSync(providersPath);
+    const coreStats = fs.statSync(coreProvidersPath);
 
-    if (!forceReload && sharedProvidersCache && sharedProvidersMtime === stats.mtimeMs) {
+    // Check client file mtime too (if registered)
+    let clientStats = null;
+    if (clientConfigDir) {
+      try {
+        clientStats = fs.statSync(path.join(clientConfigDir, 'providers.yaml'));
+      } catch {
+        // Client providers.yaml is optional
+      }
+    }
+
+    const coreChanged = sharedProvidersMtime !== coreStats.mtimeMs;
+    const clientChanged = clientStats && clientProvidersMtime !== clientStats.mtimeMs;
+
+    if (!forceReload && sharedProvidersCache && !coreChanged && !clientChanged) {
       return sharedProvidersCache;
     }
 
-    const content = fs.readFileSync(providersPath, 'utf-8');
-    const parsed = yaml.parse(content);
-    sharedProvidersCache = parsed?.providers || {};
-    sharedProvidersMtime = stats.mtimeMs;
+    // Load core providers
+    const coreContent = fs.readFileSync(coreProvidersPath, 'utf-8');
+    const coreParsed = yaml.parse(coreContent);
+    let providers = coreParsed?.providers || {};
+    sharedProvidersMtime = coreStats.mtimeMs;
+
+    // Merge client overlay if available
+    if (clientStats) {
+      const clientPath = path.join(clientConfigDir, 'providers.yaml');
+      const clientContent = fs.readFileSync(clientPath, 'utf-8');
+      const clientParsed = yaml.parse(clientContent);
+      const clientProviders = clientParsed?.providers || {};
+      providers = deepMergeProviders(providers, clientProviders);
+      clientProvidersMtime = clientStats.mtimeMs;
+    }
+
+    sharedProvidersCache = providers;
     return sharedProvidersCache;
   } catch (err) {
     console.warn('providers.yaml not found, using defaults');
@@ -276,6 +355,7 @@ export { CONFIG_DIR, PROMPTS_DIR, ROOT_DIR };
 
 export default {
   loadProviders,
+  registerClientConfigDir,
   resolveProviderConfig,
   createConfigLoader,
   createPromptLoader,
