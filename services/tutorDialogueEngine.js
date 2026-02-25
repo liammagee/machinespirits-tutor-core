@@ -978,7 +978,7 @@ function extractJsonObject(text) {
  * @param {object} options - Optional: from/to/direction overrides for logging
  */
 async function callAI(agentConfig, systemPrompt, userPrompt, agentRole = 'unknown', options = {}) {
-  const { onToken, ...logOptions } = options;
+  const { onToken, messageHistory = null, ...logOptions } = options;
   const { provider, providerConfig, model, hyperparameters } = agentConfig;
   let { temperature = 0.5, max_tokens = 1500, top_p } = hyperparameters;
 
@@ -1002,12 +1002,30 @@ async function callAI(agentConfig, systemPrompt, userPrompt, agentRole = 'unknow
   if (provider === 'anthropic') {
     // Anthropic uses a top-level `system` field (not a message role) which
     // enables automatic prompt caching of the static prefix.
+    // Anthropic requires strictly alternating user/assistant roles.
+    let messages;
+    if (messageHistory?.length) {
+      messages = [...messageHistory];
+      const last = messages[messages.length - 1];
+      if (last.role === 'user') {
+        // Merge new prompt into existing user message to maintain alternation
+        messages[messages.length - 1] = {
+          role: 'user',
+          content: `${last.content}\n\n${userPrompt}`,
+        };
+      } else {
+        messages.push({ role: 'user', content: userPrompt });
+      }
+    } else {
+      messages = [{ role: 'user', content: userPrompt }];
+    }
+
     const bodyParams = {
       model,
       max_tokens,
       temperature,
       system: systemPrompt,
-      messages: [{ role: 'user', content: userPrompt }],
+      messages,
     };
     // Only add top_p if explicitly provided (and then omit temperature per Anthropic rules)
     if (top_p !== undefined) {
@@ -1060,15 +1078,17 @@ async function callAI(agentConfig, systemPrompt, userPrompt, agentRole = 'unknow
   }
 
   if (provider === 'openai') {
+    // OpenAI tolerates consecutive same-role messages
+    const openaiMessages = messageHistory?.length
+      ? [{ role: 'system', content: systemPrompt }, ...messageHistory, { role: 'user', content: userPrompt }]
+      : [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }];
+
     const openaiBody = {
       model,
       temperature,
       max_tokens,
       top_p,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
+      messages: openaiMessages,
     };
     if (onToken) openaiBody.stream = true;
 
@@ -1113,15 +1133,17 @@ async function callAI(agentConfig, systemPrompt, userPrompt, agentRole = 'unknow
   }
 
   if (provider === 'openrouter') {
+    // OpenRouter uses OpenAI-compatible format, tolerates consecutive same-role
+    const orMessages = messageHistory?.length
+      ? [{ role: 'system', content: systemPrompt }, ...messageHistory, { role: 'user', content: userPrompt }]
+      : [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }];
+
     const orBody = {
       model,
       temperature,
       max_tokens,
       top_p,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
+      messages: orMessages,
     };
     if (onToken) orBody.stream = true;
 
@@ -1190,14 +1212,40 @@ async function callAI(agentConfig, systemPrompt, userPrompt, agentRole = 'unknow
   }
 
   if (provider === 'gemini') {
-    // Gemini uses a different API structure
+    // Gemini uses a different API structure with 'user'/'model' roles (not 'assistant')
+    // and requires alternating roles.
     const { GoogleGenAI } = await import('@google/genai');
     const gemini = new GoogleGenAI({ apiKey: providerConfig.apiKey });
+
+    let geminiContents;
+    if (messageHistory?.length) {
+      // Map assistant → model for Gemini, merge consecutive same-role if needed
+      geminiContents = [];
+      for (const msg of messageHistory) {
+        const geminiRole = msg.role === 'assistant' ? 'model' : 'user';
+        const last = geminiContents[geminiContents.length - 1];
+        if (last && last.role === geminiRole) {
+          // Merge consecutive same-role messages
+          last.parts[0].text += '\n\n' + msg.content;
+        } else {
+          geminiContents.push({ role: geminiRole, parts: [{ text: msg.content }] });
+        }
+      }
+      // Append current user prompt
+      const last = geminiContents[geminiContents.length - 1];
+      if (last && last.role === 'user') {
+        last.parts[0].text += '\n\n' + userPrompt;
+      } else {
+        geminiContents.push({ role: 'user', parts: [{ text: userPrompt }] });
+      }
+    } else {
+      geminiContents = [{ role: 'user', parts: [{ text: userPrompt }] }];
+    }
 
     const result = await gemini.models.generateContent({
       model,
       systemInstruction: systemPrompt,
-      contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
+      contents: geminiContents,
       config: { temperature, maxOutputTokens: max_tokens, topP: top_p },
     });
 
@@ -1216,14 +1264,15 @@ async function callAI(agentConfig, systemPrompt, userPrompt, agentRole = 'unknow
   if (provider === 'local') {
     // Local LLM provider (LM Studio, Ollama, llama.cpp)
     // Uses OpenAI-compatible API format by default
+    const localMessages = messageHistory?.length
+      ? [{ role: 'system', content: systemPrompt }, ...messageHistory, { role: 'user', content: userPrompt }]
+      : [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }];
+
     const localBody = {
       model,
       temperature,
       max_tokens,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
+      messages: localMessages,
     };
     if (onToken) localBody.stream = true;
 
@@ -1374,6 +1423,7 @@ async function egoGenerateSuggestions(learnerContext, curriculumContext, simulat
     dialecticalNegotiation = false, // Phase 2: AI-powered dialectical struggle
     behavioralOverrides = null, // Quantitative params from superego self-reflection
     onToken = null, // Streaming callback for token-by-token output
+    messageHistory = null, // Multi-turn message chain (array of {role, content})
   } = options;
 
   let egoConfig = configLoader.getAgentConfig('ego', profileName);
@@ -1460,7 +1510,7 @@ Respond with ONLY a JSON array containing exactly one suggestion object.`;
     ? `${systemPromptExtension}\n\n${egoConfig.prompt}`
     : egoConfig.prompt;
 
-  const response = await callAI(egoConfig, effectiveSystemPrompt, userPrompt, 'ego', { onToken });
+  const response = await callAI(egoConfig, effectiveSystemPrompt, userPrompt, 'ego', { onToken, messageHistory });
 
   // Extract JSON from response (handles markdown code blocks)
   let suggestions = extractJsonArray(response.text);
@@ -1701,7 +1751,7 @@ function getFallbackConfig(originalConfig) {
  * Superego reviews and critiques Ego's suggestions
  */
 async function superegoReview(egoSuggestions, learnerContext, options = {}) {
-  const { previousFeedback = null, profileName = null, strategy = null, superegoModel = null, superegoPromptExtension = null, onToken = null } = options;
+  const { previousFeedback = null, profileName = null, strategy = null, superegoModel = null, superegoPromptExtension = null, onToken = null, messageHistory = null } = options;
 
   let superegoConfig = configLoader.getAgentConfig('superego', profileName, { strategy });
   if (!superegoConfig && !superegoModel) {
@@ -1787,7 +1837,7 @@ Respond with ONLY a JSON object in the format specified.`;
     ? `${superegoPromptExtension}\n\n${superegoConfig.prompt}`
     : superegoConfig.prompt;
 
-  const response = await callAI(superegoConfig, effectiveSuperegoPrompt, userPrompt, 'superego', { onToken });
+  const response = await callAI(superegoConfig, effectiveSuperegoPrompt, userPrompt, 'superego', { onToken, messageHistory });
 
   // No model-swapping fallback: parse failures auto-approve rather than
   // silently switching to a different model (which compromises test integrity)
@@ -1825,7 +1875,7 @@ Respond with ONLY a JSON object in the format specified.`;
  * Ego revises suggestions based on Superego feedback
  */
 async function egoRevise(originalSuggestions, superegoFeedback, learnerContext, curriculumContext, options = {}) {
-  const { profileName = null, from = null, to = null, direction = null, egoModel = null, systemPromptExtension = null, onToken = null } = options;
+  const { profileName = null, from = null, to = null, direction = null, egoModel = null, systemPromptExtension = null, onToken = null, messageHistory = null } = options;
 
   let egoConfig = configLoader.getAgentConfig('ego', profileName);
   if (!egoConfig) {
@@ -1888,7 +1938,7 @@ Respond with ONLY a JSON array of revised suggestions.`;
     ? `${systemPromptExtension}\n\n${egoConfig.prompt}`
     : egoConfig.prompt;
 
-  const response = await callAI(egoConfig, effectiveSystemPrompt, userPrompt, 'ego-revise', { ...callOptions, onToken });
+  const response = await callAI(egoConfig, effectiveSystemPrompt, userPrompt, 'ego-revise', { ...callOptions, onToken, messageHistory });
 
   // Extract JSON from response (handles markdown code blocks)
   const suggestions = extractJsonArray(response.text);
@@ -1991,6 +2041,8 @@ export async function runDialogue(context, options = {}) {
     _dialogueId = null, // Internal: reuse dialogue ID for multi-turn continuity
     _skipLogging = false, // Internal: skip file logging for multi-turn intermediate steps
     onStream = null, // Streaming callback: receives { type, agent, round, token, stage }
+    messageHistory = null, // External conversation chain from prior turns (array of {role, content})
+    conversationMode = 'single-prompt', // 'messages' for multi-turn message chains, 'single-prompt' for legacy
   } = options;
 
   // Helper: create an onToken callback for a specific agent/round that fires
@@ -2199,6 +2251,14 @@ export async function runDialogue(context, options = {}) {
   }
 
   // Step 1: Ego generates initial suggestions
+  // When using message chains, pass external history so the ego sees prior turns
+  // as proper assistant/user messages rather than serialized text.
+  const useMessageChains = conversationMode === 'messages';
+
+  // Internal chains track ego and superego exchanges within this turn
+  let egoInternalHistory = [];    // Ego's drafts + superego feedback (for ego revision)
+  let superegoInternalHistory = []; // Superego's own prior critiques (for multi-round review)
+
   onStream?.({ type: 'stage', stage: 'ego_generating', round: 0 });
   const egoInitial = await egoGenerateSuggestions(
     learnerContext,
@@ -2221,9 +2281,19 @@ export async function runDialogue(context, options = {}) {
       dialecticalNegotiation,
       behavioralOverrides,
       onToken: makeOnToken('ego', 0),
+      // Pass external history for message chain mode
+      messageHistory: useMessageChains ? messageHistory : null,
     }
   );
   onStream?.({ type: 'complete', agent: 'ego', round: 0 });
+
+  // Record ego's initial output in its internal chain (for revision rounds)
+  if (useMessageChains && egoInitial.suggestions?.length > 0) {
+    egoInternalHistory.push({
+      role: 'assistant',
+      content: egoInitial.rawResponse || JSON.stringify(egoInitial.suggestions),
+    });
+  }
   currentSuggestions = egoInitial.suggestions;
 
   if (egoInitial.metrics) {
@@ -2336,14 +2406,27 @@ export async function runDialogue(context, options = {}) {
       console.log(`\n${fmt.boldColor('brightYellow', '═'.repeat(20))} ${fmt.bold(fmt.color('brightYellow', roundLabel))} ${fmt.boldColor('brightYellow', '═'.repeat(20))}`);
     }
 
-    // Superego reviews
+    // Superego reviews — pass its own internal chain for multi-round context
     onStream?.({ type: 'stage', stage: 'superego_reviewing', round });
     const superegoResult = await superegoReview(
       currentSuggestions,
       learnerContext,
-      { previousFeedback, profileName, strategy: superegoStrategy, superegoModel, superegoPromptExtension, onToken: makeOnToken('superego', round) }
+      {
+        previousFeedback, profileName, strategy: superegoStrategy, superegoModel, superegoPromptExtension,
+        onToken: makeOnToken('superego', round),
+        messageHistory: useMessageChains ? (superegoInternalHistory.length > 0 ? superegoInternalHistory : null) : null,
+      }
     );
     onStream?.({ type: 'complete', agent: 'superego', round });
+
+    // Record superego's critique in its internal chain (for next review round)
+    if (useMessageChains && superegoResult.rawResponse) {
+      // The user prompt that was sent is the ego suggestions + context (reconstructed)
+      superegoInternalHistory.push(
+        { role: 'user', content: `Review these suggestions:\n${JSON.stringify(currentSuggestions, null, 2)}` },
+        { role: 'assistant', content: superegoResult.rawResponse },
+      );
+    }
 
     if (superegoResult.metrics) {
       metrics.totalLatencyMs += superegoResult.metrics.latencyMs || 0;
@@ -2410,13 +2493,23 @@ export async function runDialogue(context, options = {}) {
     if (superegoResult.approved && hasSuggestions) {
       // Ego incorporates the suggestions before final output
       // This is the final step before delivering to user, so mark direction as ego → user
+      // Build combined history: external chain + ego's internal exchanges + superego feedback
+      let egoRevisionHistory = null;
+      if (useMessageChains) {
+        egoRevisionHistory = [
+          ...(messageHistory || []),
+          ...egoInternalHistory,
+          { role: 'user', content: `Quality review feedback:\n${superegoResult.feedback || superegoResult.rawResponse}` },
+        ];
+      }
+
       onStream?.({ type: 'stage', stage: 'ego_revising', round });
       const egoRevision = await egoRevise(
         currentSuggestions,
         superegoResult,
         learnerContext,
         curriculumContext,
-        { profileName, from: 'ego', to: 'user', direction: 'response', egoModel, systemPromptExtension, onToken: makeOnToken('ego', round) }
+        { profileName, from: 'ego', to: 'user', direction: 'response', egoModel, systemPromptExtension, onToken: makeOnToken('ego', round), messageHistory: egoRevisionHistory }
       );
       onStream?.({ type: 'complete', agent: 'ego', round });
       currentSuggestions = egoRevision.suggestions;
@@ -2488,6 +2581,16 @@ export async function runDialogue(context, options = {}) {
     }
 
     // Ego revises based on feedback
+    // Build combined history: external chain + ego's internal exchanges + superego feedback
+    let rejectionRevisionHistory = null;
+    if (useMessageChains) {
+      rejectionRevisionHistory = [
+        ...(messageHistory || []),
+        ...egoInternalHistory,
+        { role: 'user', content: `Quality review feedback (rejected):\n${superegoResult.feedback || superegoResult.rawResponse}` },
+      ];
+    }
+
     onStream?.({ type: 'stage', stage: 'ego_revising', round });
     previousFeedback = superegoResult.feedback;
     const previousSuggestions = currentSuggestions.map(s => ({ ...s }));
@@ -2496,10 +2599,18 @@ export async function runDialogue(context, options = {}) {
       superegoResult,
       learnerContext,
       curriculumContext,
-      { profileName, egoModel, systemPromptExtension, onToken: makeOnToken('ego', round) }
+      { profileName, egoModel, systemPromptExtension, onToken: makeOnToken('ego', round), messageHistory: rejectionRevisionHistory }
     );
     onStream?.({ type: 'complete', agent: 'ego', round });
     currentSuggestions = egoRevision.suggestions;
+
+    // Record the revision exchange in ego's internal chain
+    if (useMessageChains) {
+      egoInternalHistory.push(
+        { role: 'user', content: `Quality review feedback (rejected):\n${superegoResult.feedback || superegoResult.rawResponse}` },
+        { role: 'assistant', content: egoRevision.rawResponse || JSON.stringify(egoRevision.suggestions) },
+      );
+    }
 
     // Convergence threshold: if ego's revision is too similar to previous,
     // further rounds won't help — converge early

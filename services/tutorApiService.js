@@ -15,11 +15,12 @@ import * as configLoader from './tutorConfigLoader.js';
  * Build context strings for the tutor API
  * Returns a formatted context object ready for dialogue engine
  */
-export function buildContext(learnerContextStr, curriculumContextStr, simulationsContextStr) {
+export function buildContext(learnerContextStr, curriculumContextStr, simulationsContextStr, messageHistory = null) {
   return {
     learnerContext: learnerContextStr || '',
     curriculumContext: curriculumContextStr || getSampleCurriculum(),
     simulationsContext: simulationsContextStr || getSampleSimulations(),
+    messageHistory: messageHistory || null,
   };
 }
 
@@ -95,6 +96,8 @@ export async function generateSuggestions(context, config = {}) {
     learnerId = null, // For Writing Pad memory persistence between turns
     dialecticalNegotiation = false, // Phase 2: AI-powered dialectical struggle
     onStream = null, // Streaming callback for token-by-token progress
+    conversationMode = 'single-prompt', // 'messages' for multi-turn message chains
+    messageHistory = null, // External conversation chain (array of {role, content})
   } = config;
 
   const startTime = Date.now();
@@ -138,6 +141,8 @@ export async function generateSuggestions(context, config = {}) {
         learnerId, // Writing Pad memory persistence (Phase 1)
         dialecticalNegotiation, // Phase 2: AI-powered dialectical struggle
         onStream, // Streaming callback for token-by-token progress
+        conversationMode, // 'messages' for multi-turn message chains
+        messageHistory: messageHistory || context.messageHistory || null, // External conversation chain
         // Enable trace for transcript/expand mode to ensure complete logging
         trace: trace || dialogueEngine.isTranscriptMode() || dialogueEngine.isExpandMode(),
       }
