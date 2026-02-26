@@ -1004,19 +1004,14 @@ async function callAI(agentConfig, systemPrompt, userPrompt, agentRole = 'unknow
     // enables automatic prompt caching of the static prefix.
     // Anthropic requires strictly alternating user/assistant roles.
     let messages;
+    let effectiveSystem;
     if (messageHistory?.length) {
+      // Message-chain mode: fold userPrompt (context/curriculum/task) into system,
+      // keep messages as the clean conversation chain
+      effectiveSystem = `${systemPrompt}\n\n${userPrompt}`;
       messages = [...messageHistory];
-      const last = messages[messages.length - 1];
-      if (last.role === 'user') {
-        // Merge new prompt into existing user message to maintain alternation
-        messages[messages.length - 1] = {
-          role: 'user',
-          content: `${last.content}\n\n${userPrompt}`,
-        };
-      } else {
-        messages.push({ role: 'user', content: userPrompt });
-      }
     } else {
+      effectiveSystem = systemPrompt;
       messages = [{ role: 'user', content: userPrompt }];
     }
 
@@ -1024,7 +1019,7 @@ async function callAI(agentConfig, systemPrompt, userPrompt, agentRole = 'unknow
       model,
       max_tokens,
       temperature,
-      system: systemPrompt,
+      system: effectiveSystem,
       messages,
     };
     // Only add top_p if explicitly provided (and then omit temperature per Anthropic rules)
@@ -1078,9 +1073,9 @@ async function callAI(agentConfig, systemPrompt, userPrompt, agentRole = 'unknow
   }
 
   if (provider === 'openai') {
-    // OpenAI tolerates consecutive same-role messages
+    // Message-chain mode: fold userPrompt into system, messages = clean conversation
     const openaiMessages = messageHistory?.length
-      ? [{ role: 'system', content: systemPrompt }, ...messageHistory, { role: 'user', content: userPrompt }]
+      ? [{ role: 'system', content: `${systemPrompt}\n\n${userPrompt}` }, ...messageHistory]
       : [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }];
 
     const openaiBody = {
@@ -1133,9 +1128,9 @@ async function callAI(agentConfig, systemPrompt, userPrompt, agentRole = 'unknow
   }
 
   if (provider === 'openrouter') {
-    // OpenRouter uses OpenAI-compatible format, tolerates consecutive same-role
+    // Message-chain mode: fold userPrompt into system, messages = clean conversation
     const orMessages = messageHistory?.length
-      ? [{ role: 'system', content: systemPrompt }, ...messageHistory, { role: 'user', content: userPrompt }]
+      ? [{ role: 'system', content: `${systemPrompt}\n\n${userPrompt}` }, ...messageHistory]
       : [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }];
 
     const orBody = {
@@ -1218,33 +1213,23 @@ async function callAI(agentConfig, systemPrompt, userPrompt, agentRole = 'unknow
     const gemini = new GoogleGenAI({ apiKey: providerConfig.apiKey });
 
     let geminiContents;
+    let geminiSystem;
     if (messageHistory?.length) {
-      // Map assistant → model for Gemini, merge consecutive same-role if needed
+      // Message-chain mode: fold userPrompt into system, contents = clean conversation
+      geminiSystem = `${systemPrompt}\n\n${userPrompt}`;
       geminiContents = [];
       for (const msg of messageHistory) {
         const geminiRole = msg.role === 'assistant' ? 'model' : 'user';
-        const last = geminiContents[geminiContents.length - 1];
-        if (last && last.role === geminiRole) {
-          // Merge consecutive same-role messages
-          last.parts[0].text += '\n\n' + msg.content;
-        } else {
-          geminiContents.push({ role: geminiRole, parts: [{ text: msg.content }] });
-        }
-      }
-      // Append current user prompt
-      const last = geminiContents[geminiContents.length - 1];
-      if (last && last.role === 'user') {
-        last.parts[0].text += '\n\n' + userPrompt;
-      } else {
-        geminiContents.push({ role: 'user', parts: [{ text: userPrompt }] });
+        geminiContents.push({ role: geminiRole, parts: [{ text: msg.content }] });
       }
     } else {
+      geminiSystem = systemPrompt;
       geminiContents = [{ role: 'user', parts: [{ text: userPrompt }] }];
     }
 
     const result = await gemini.models.generateContent({
       model,
-      systemInstruction: systemPrompt,
+      systemInstruction: geminiSystem,
       contents: geminiContents,
       config: { temperature, maxOutputTokens: max_tokens, topP: top_p },
     });
@@ -1263,9 +1248,9 @@ async function callAI(agentConfig, systemPrompt, userPrompt, agentRole = 'unknow
 
   if (provider === 'local') {
     // Local LLM provider (LM Studio, Ollama, llama.cpp)
-    // Uses OpenAI-compatible API format by default
+    // Message-chain mode: fold userPrompt into system, messages = clean conversation
     const localMessages = messageHistory?.length
-      ? [{ role: 'system', content: systemPrompt }, ...messageHistory, { role: 'user', content: userPrompt }]
+      ? [{ role: 'system', content: `${systemPrompt}\n\n${userPrompt}` }, ...messageHistory]
       : [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }];
 
     const localBody = {
