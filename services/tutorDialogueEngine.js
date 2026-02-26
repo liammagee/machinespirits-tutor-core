@@ -291,6 +291,22 @@ try {
 // - TUTOR_EXPAND=true or --expand: Show full prompt/response for each message
 // - Metrics (tokens, latency) shown when available
 
+let _quietMode = false;
+
+/**
+ * Enable/disable quiet mode. When enabled, all verbose console output is
+ * suppressed (dialogue headers, learner context, API call logs, etc.)
+ * without activating transcript step formatting.
+ * Intended for use by the eval CLI's --live flag.
+ */
+export function setQuietMode(enabled) {
+  _quietMode = Boolean(enabled);
+}
+
+function isQuietOrTranscript() {
+  return _quietMode || process.env.TUTOR_TRANSCRIPT === 'true';
+}
+
 function isTranscriptMode() {
   return process.env.TUTOR_TRANSCRIPT === 'true';
 }
@@ -725,8 +741,8 @@ function logApiCall(agentRole, action, data, options = {}) {
   const loggingConfig = configLoader.getLoggingConfig();
   if (!loggingConfig.log_api_calls) return;
 
-  // Skip verbose console output in transcript mode (clean view)
-  const useTranscriptMode = isTranscriptMode();
+  // Skip verbose console output in transcript or quiet mode (clean view)
+  const useTranscriptMode = isQuietOrTranscript();
 
   // Auto-increment step for conversation flow visibility
   const step = options.forceStep ?? nextStep();
@@ -1331,7 +1347,7 @@ async function superegoReinterpretSignals(learnerContext, options = {}) {
           isConfigured: resolved.isConfigured ?? superegoConfig.providerConfig?.isConfigured,
         },
       };
-      console.log(`[Superego Reinterpret] Model override: ${JSON.stringify(superegoModel)} -> ${resolved.model}`);
+      if (!isQuietOrTranscript()) console.log(`[Superego Reinterpret] Model override: ${JSON.stringify(superegoModel)} -> ${resolved.model}`);
     }
   }
 
@@ -1560,7 +1576,7 @@ ${userPrompt}`;
           behavioralOverrides,
         });
 
-        if (negotiation.recognitionMoment) {
+        if (negotiation.recognitionMoment && !isQuietOrTranscript()) {
           console.log(`[Recognition] Phase 2 dialectical moment: ${negotiation.recognitionMoment.id}`);
           console.log(`  Strategy: ${negotiation.strategy}`);
           console.log(`  Rounds: ${negotiation.rounds}`);
@@ -1581,9 +1597,9 @@ ${userPrompt}`;
           };
         }
       } catch (error) {
-        console.error('[Recognition] Phase 2 negotiation failed:', error.message);
+        if (!isQuietOrTranscript()) console.error('[Recognition] Phase 2 negotiation failed:', error.message);
         // Fall back to Phase 0/1 if Phase 2 fails
-        console.log('[Recognition] Falling back to Phase 0/1');
+        if (!isQuietOrTranscript()) console.log('[Recognition] Falling back to Phase 0/1');
       }
     }
 
@@ -1616,10 +1632,12 @@ ${userPrompt}`;
             learnerId // Phase 1: Persist to Writing Pad if learner ID provided
           );
 
-          console.log(`[Recognition] Transformative moment: ${moment.id}`);
-          console.log(`  Ghost: "${ghostJudgment.voice}"`);
-          console.log(`  Learner: ${learnerNeed.need} (${learnerNeed.intensity.toFixed(2)})`);
-          console.log(`  Synthesis: ${synthesis.synthesis}`);
+          if (!isQuietOrTranscript()) {
+            console.log(`[Recognition] Transformative moment: ${moment.id}`);
+            console.log(`  Ghost: "${ghostJudgment.voice}"`);
+            console.log(`  Learner: ${learnerNeed.need} (${learnerNeed.intensity.toFixed(2)})`);
+            console.log(`  Synthesis: ${synthesis.synthesis}`);
+          }
         }
 
         // Use synthesized suggestion
@@ -1656,7 +1674,7 @@ async function parseJsonWithFallback(text, pattern, retryFn, context) {
 
   const jsonStr = extractJson(text);
   if (!jsonStr) {
-    if (!isTranscriptMode()) {
+    if (!isQuietOrTranscript()) {
       console.warn(`[${context}] No JSON found in response:`, text.slice(0, 500));
     }
     return { parsed: null, retried: false, rawResponse: text };
@@ -1671,7 +1689,7 @@ async function parseJsonWithFallback(text, pattern, retryFn, context) {
     try {
       const repaired = jsonrepair(jsonStr);
       const parsed = JSON.parse(repaired);
-      if (!isTranscriptMode()) {
+      if (!isQuietOrTranscript()) {
         console.debug(`[${context}] JSON repaired successfully`);
       }
       return { parsed, retried: false, rawResponse: text };
@@ -1679,13 +1697,13 @@ async function parseJsonWithFallback(text, pattern, retryFn, context) {
       // jsonrepair couldn't fix it — fall through to model retry
     }
 
-    if (!isTranscriptMode()) {
+    if (!isQuietOrTranscript()) {
       console.warn(`[${context}] Failed to parse JSON: ${e.message}`);
     }
 
     // Retry with fallback model
     if (retryFn) {
-      if (!isTranscriptMode()) {
+      if (!isQuietOrTranscript()) {
         console.log(`[${context}] Retrying with stronger model...`);
       }
       try {
@@ -1693,13 +1711,13 @@ async function parseJsonWithFallback(text, pattern, retryFn, context) {
         const retryStr = extractJson(retryResponse.text);
         if (retryStr) {
           const parsed = JSON.parse(retryStr);
-          if (!isTranscriptMode()) {
+          if (!isQuietOrTranscript()) {
             console.log(`[${context}] Fallback model succeeded`);
           }
           return { parsed, retried: true, rawResponse: retryResponse.text, metrics: retryResponse };
         }
       } catch (retryError) {
-        if (!isTranscriptMode()) {
+        if (!isQuietOrTranscript()) {
           console.warn(`[${context}] Fallback also failed:`, retryError.message);
         }
       }
@@ -1762,7 +1780,7 @@ async function superegoReview(egoSuggestions, learnerContext, options = {}) {
         metrics: null,
       };
     }
-    console.log(`[Superego Review] No superego in profile '${profileName}', bootstrapped from 'recognition' template`);
+    if (!isQuietOrTranscript()) console.log(`[Superego Review] No superego in profile '${profileName}', bootstrapped from 'recognition' template`);
   }
 
   // Apply superego model override if specified (for benchmarking)
@@ -1780,7 +1798,7 @@ async function superegoReview(egoSuggestions, learnerContext, options = {}) {
           isConfigured: resolved.isConfigured ?? superegoConfig.providerConfig?.isConfigured,
         },
       };
-      console.log(`[Superego Review] Model override: ${JSON.stringify(superegoModel)} -> ${resolved.model}`);
+      if (!isQuietOrTranscript()) console.log(`[Superego Review] Model override: ${JSON.stringify(superegoModel)} -> ${resolved.model}`);
     }
   }
 
@@ -1942,8 +1960,8 @@ function logDialogue(dialogueId, data) {
   const evalConfig = configLoader.getEvaluationConfig();
   const loggingConfig = configLoader.getLoggingConfig();
 
-  // Print dialogue summary to console with rich formatting (skip in transcript mode)
-  if (loggingConfig.log_api_calls && !isTranscriptMode()) {
+  // Print dialogue summary to console with rich formatting (skip in transcript/quiet mode)
+  if (loggingConfig.log_api_calls && !isQuietOrTranscript()) {
     console.log(`\n${fmt.boldColor('brightGreen', '═'.repeat(65))}`);
     console.log(`${fmt.boldColor('brightGreen', '✓ DIALOGUE COMPLETE')} ${fmt.dim(`[${dialogueId.slice(-12)}]`)}`);
     console.log(fmt.boldColor('brightGreen', '═'.repeat(65)));
@@ -2063,7 +2081,7 @@ export async function runDialogue(context, options = {}) {
     const resolved = configLoader.resolveModel(egoModel);
     if (resolved && resolved.model) {
       egoConfig = { ...egoConfig, provider: resolved.provider, model: resolved.model };
-      console.log(`[Dialogue] Ego model override: ${egoModel} -> ${resolved.model}`);
+      if (!isQuietOrTranscript()) console.log(`[Dialogue] Ego model override: ${egoModel} -> ${resolved.model}`);
     }
   }
 
@@ -2094,9 +2112,9 @@ export async function runDialogue(context, options = {}) {
   const startTime = Date.now();
 
   // Log dialogue header with learner context (rich formatting)
-  // Skip verbose output if transcript mode is enabled (clean view)
+  // Skip verbose output if transcript or quiet mode is enabled (clean view)
   const loggingConfig = configLoader.getLoggingConfig();
-  const useTranscriptMode = isTranscriptMode();
+  const useTranscriptMode = isQuietOrTranscript();
 
   if (loggingConfig.log_api_calls && !useTranscriptMode) {
     console.log(`\n${fmt.boldColor('brightBlue', '╔' + '═'.repeat(63) + '╗')}`);
@@ -2323,7 +2341,7 @@ export async function runDialogue(context, options = {}) {
 
   // Retry once for dialogue-enabled profiles before returning 0-round failure
   if (currentSuggestions.length === 0 && hasSuperego) {
-    console.log(`[Dialogue] Ego initial generation empty for dialogue profile, retrying...`);
+    if (!isQuietOrTranscript()) console.log(`[Dialogue] Ego initial generation empty for dialogue profile, retrying...`);
     const egoRetry = await egoGenerateSuggestions(
       learnerContext, curriculumContext, simulationsContext,
       { isNewUser, profileName, superegoReinterpretation, outputSize, egoModel, superegoModel, hyperparameters,
@@ -2374,11 +2392,11 @@ export async function runDialogue(context, options = {}) {
         retrieveContext: false, // Don't retrieve on every suggestion
       });
 
-      if (memoryCycle) {
+      if (memoryCycle && !isQuietOrTranscript()) {
         console.log(`[Memory] Cycle complete: promoted ${memoryCycle.operations.promotion?.promoted || 0} patterns`);
       }
     } catch (error) {
-      console.error(`[Memory] Cycle failed for learner ${learnerId}:`, error.message);
+      if (!isQuietOrTranscript()) console.error(`[Memory] Cycle failed for learner ${learnerId}:`, error.message);
       // Non-blocking - continue without memory cycle
     }
   }
@@ -2432,7 +2450,8 @@ export async function runDialogue(context, options = {}) {
       });
     }
 
-    if (trace) {
+    // Only record superego trace if it actually ran (has metrics from an LLM call)
+    if (trace && superegoResult.metrics) {
       dialogueTrace.push({
         round,
         agent: 'superego',
@@ -2601,7 +2620,7 @@ export async function runDialogue(context, options = {}) {
     // further rounds won't help — converge early
     const similarity = suggestionSimilarity(previousSuggestions, currentSuggestions);
     if (similarity >= convergenceThreshold) {
-      console.log(`[Dialogue] Round ${round}: similarity ${(similarity * 100).toFixed(0)}% >= threshold ${(convergenceThreshold * 100).toFixed(0)}%, converging`);
+      if (!isQuietOrTranscript()) console.log(`[Dialogue] Round ${round}: similarity ${(similarity * 100).toFixed(0)}% >= threshold ${(convergenceThreshold * 100).toFixed(0)}%, converging`);
       metrics.totalLatencyMs = Date.now() - startTime;
       monitoringService.endSession(dialogueId);
       const result = {
@@ -3243,7 +3262,7 @@ function recordRecognitionMoment(ghostJudgment, learnerNeed, synthesis, paramete
         parameters: parameters,
       });
 
-      console.log(`[Recognition] Persisted moment to writing pad for learner ${learnerId}`);
+      if (!isQuietOrTranscript()) console.log(`[Recognition] Persisted moment to writing pad for learner ${learnerId}`);
     } catch (error) {
       console.error('[Recognition] Failed to persist to writing pad:', error.message);
       // Continue with in-memory moment even if database fails
@@ -3286,6 +3305,7 @@ export default {
   isExpandMode,
   resetTranscript,
   parseContextSummary,
+  setQuietMode,
   // Recognition engine exports
   getRecognitionMoments,
   clearRecognitionMoments,
