@@ -1191,17 +1191,10 @@ async function callAI(agentConfig, systemPrompt, userPrompt, agentRole = 'unknow
 
       // Log warning if response is empty (model may have failed silently)
       if (!text) {
-        console.warn(`[${agentRole}] OpenRouter returned empty content. Full response:`, JSON.stringify({
-          id: data?.id,
-          model: data?.model,
-          choices: data?.choices?.map(c => ({
-            index: c.index,
-            finish_reason: c.finish_reason,
-            content_length: c.message?.content?.length || 0,
-          })),
-          usage: data?.usage,
-          error: data?.error,
-        }, null, 2));
+        const reason = data?.choices?.[0]?.finish_reason || 'unknown';
+        const reasoning = data?.usage?.completion_tokens_details?.reasoning_tokens;
+        const reasoningNote = reasoning ? `, reasoning=${reasoning}` : '';
+        console.warn(`[${agentRole}] Empty content from ${data?.model || model} (finish=${reason}, ${inputTokens}in/${outputTokens}out${reasoningNote})`);
       }
     }
 

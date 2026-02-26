@@ -46,7 +46,8 @@ export {
   quickGenerate,
   getAvailableProfiles,
   analyzeInterventionNeeds,
-  setLogDir
+  setLogDir,
+  setQuietMode
 } from './services/tutorDialogueEngine.js';
 
 export {
