@@ -2030,6 +2030,7 @@ export async function runDialogue(context, options = {}) {
     profileName = null,
     egoModel = null, // Override ego model for benchmarking (e.g., "openrouter.haiku")
     superegoModel = null, // Override superego model for benchmarking
+    disableSuperego = false, // Explicitly disable superego even if profile has one configured
     hyperparameters = null, // Override hyperparameters (e.g., max_tokens for reasoning models)
     superegoStrategy = null, // Superego intervention strategy (e.g., 'socratic_challenge')
     outputSize = 'normal', // compact, normal, expanded - affects response verbosity
@@ -2073,7 +2074,7 @@ export async function runDialogue(context, options = {}) {
 
   // Start monitoring session for real-time tracking
   const profile = configLoader.getActiveProfile(profileName);
-  const hasSuperego = profile.dialogue?.enabled === true && profile.superego !== null;
+  const hasSuperego = !disableSuperego && profile.dialogue?.enabled === true && profile.superego !== null;
   let egoConfig = configLoader.getAgentConfig('ego', profileName);
 
   // Apply ego model override if specified (for benchmarking)
@@ -2409,18 +2410,23 @@ export async function runDialogue(context, options = {}) {
       console.log(`\n${fmt.boldColor('brightYellow', '═'.repeat(20))} ${fmt.bold(fmt.color('brightYellow', roundLabel))} ${fmt.boldColor('brightYellow', '═'.repeat(20))}`);
     }
 
-    // Superego reviews — pass its own internal chain for multi-round context
-    onStream?.({ type: 'stage', stage: 'superego_reviewing', round });
-    const superegoResult = await superegoReview(
-      currentSuggestions,
-      learnerContext,
-      {
-        previousFeedback, profileName, strategy: superegoStrategy, superegoModel, superegoPromptExtension,
-        onToken: makeOnToken('superego', round),
-        messageHistory: useMessageChains ? (superegoInternalHistory.length > 0 ? superegoInternalHistory : null) : null,
-      }
-    );
-    onStream?.({ type: 'complete', agent: 'superego', round });
+    // Superego reviews — skip entirely when superego is disabled (single-agent cells)
+    let superegoResult;
+    if (hasSuperego) {
+      onStream?.({ type: 'stage', stage: 'superego_reviewing', round });
+      superegoResult = await superegoReview(
+        currentSuggestions,
+        learnerContext,
+        {
+          previousFeedback, profileName, strategy: superegoStrategy, superegoModel, superegoPromptExtension,
+          onToken: makeOnToken('superego', round),
+          messageHistory: useMessageChains ? (superegoInternalHistory.length > 0 ? superegoInternalHistory : null) : null,
+        }
+      );
+      onStream?.({ type: 'complete', agent: 'superego', round });
+    } else {
+      superegoResult = { approved: true, interventionType: 'none', feedback: 'No superego configured', metrics: null };
+    }
 
     // Record superego's critique in its internal chain (for next review round)
     if (useMessageChains && superegoResult.rawResponse) {
