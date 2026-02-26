@@ -762,7 +762,7 @@ function logApiCall(agentRole, action, data, options = {}) {
   // IMPORTANT: Always include explicit from/to for every message
   // Allow overrides from options for special cases like incorporate-feedback
   const profile = configLoader.getActiveProfile(state.profileName);
-  const hasSuperego = profile.dialogue?.enabled === true && profile.superego !== null;
+  const hasSuperego = !state.disableSuperego && profile.dialogue?.enabled === true && profile.superego !== null;
 
   let flowDirection;
   if (options.from && options.to) {
@@ -2071,6 +2071,11 @@ export async function runDialogue(context, options = {}) {
     const state = _getState(dialogueId);
     state.profileName = profileName;
   }
+
+  // Store disableSuperego in dialogue state so logApiCall() can read it
+  // (logApiCall doesn't have access to runDialogue's options)
+  const dialogueState = _getState(dialogueId);
+  if (dialogueState) dialogueState.disableSuperego = disableSuperego;
 
   // Start monitoring session for real-time tracking
   const profile = configLoader.getActiveProfile(profileName);
