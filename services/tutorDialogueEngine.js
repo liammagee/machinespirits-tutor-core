@@ -819,7 +819,7 @@ function logApiCall(agentRole, action, data, options = {}) {
 /**
  * Log a flow entry (non-API step like user input/output)
  * Used to complete the dialogue flow visualization
- * @param {string} agent - Agent name ('user', 'ego', 'superego')
+ * @param {string} agent - Agent name ('tutor', 'ego', 'superego')
  * @param {string} action - Action type ('context_input', 'final_output')
  * @param {object} data - Flow data (direction, suggestions, context summary, etc.)
  */
@@ -2153,10 +2153,10 @@ export async function runDialogue(context, options = {}) {
   if (trace) {
     dialogueTrace.push({
       round: 0,
-      agent: 'user',
+      agent: 'tutor',
       action: 'context_input',
       direction: 'input',
-      from: 'user',
+      from: 'tutor',
       to: 'ego',
       rawContext: learnerContext,
       contextData: parseContextSummary(learnerContext),
