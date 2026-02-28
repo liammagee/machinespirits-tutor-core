@@ -762,7 +762,8 @@ function logApiCall(agentRole, action, data, options = {}) {
   // IMPORTANT: Always include explicit from/to for every message
   // Allow overrides from options for special cases like incorporate-feedback
   const profile = configLoader.getActiveProfile(state.profileName);
-  const hasSuperego = !state.disableSuperego && profile.dialogue?.enabled === true && profile.superego !== null;
+  const hasSuperegoOverride = !!state.superegoModelOverride;
+  const hasSuperego = !state.disableSuperego && (profile.dialogue?.enabled === true || hasSuperegoOverride) && (profile.superego !== null || hasSuperegoOverride);
 
   let flowDirection;
   if (options.from && options.to) {
@@ -2065,14 +2066,17 @@ export async function runDialogue(context, options = {}) {
     state.profileName = profileName;
   }
 
-  // Store disableSuperego in dialogue state so logApiCall() can read it
+  // Store disableSuperego and superegoModel in dialogue state so logApiCall() can read them
   // (logApiCall doesn't have access to runDialogue's options)
   const dialogueState = _getState(dialogueId);
-  if (dialogueState) dialogueState.disableSuperego = disableSuperego;
+  if (dialogueState) {
+    dialogueState.disableSuperego = disableSuperego;
+    dialogueState.superegoModelOverride = superegoModel || null;
+  }
 
   // Start monitoring session for real-time tracking
   const profile = configLoader.getActiveProfile(profileName);
-  const hasSuperego = !disableSuperego && profile.dialogue?.enabled === true && profile.superego !== null;
+  const hasSuperego = !disableSuperego && (profile.dialogue?.enabled === true || !!superegoModel) && (profile.superego !== null || !!superegoModel);
   let egoConfig = configLoader.getAgentConfig('ego', profileName);
 
   // Apply ego model override if specified (for benchmarking)
