@@ -303,7 +303,7 @@ export function setQuietMode(enabled) {
   _quietMode = Boolean(enabled);
 }
 
-function isQuietOrTranscript() {
+export function isQuietOrTranscript() {
   return _quietMode || process.env.TUTOR_TRANSCRIPT === 'true';
 }
 

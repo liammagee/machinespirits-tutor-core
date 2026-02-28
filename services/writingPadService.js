@@ -14,6 +14,7 @@
 
 import { randomBytes } from 'crypto';
 import { getDb } from './dbService.js';
+import { isQuietOrTranscript } from './tutorDialogueEngine.js';
 
 // ============================================================================
 // Writing Pad Management
@@ -27,7 +28,7 @@ import { getDb } from './dbService.js';
 export function initializeWritingPad(learnerId) {
   const existing = getWritingPad(learnerId);
   if (existing) {
-    console.log(`[WritingPad] Pad already exists for learner ${learnerId}`);
+    if (!isQuietOrTranscript()) console.log(`[WritingPad] Pad already exists for learner ${learnerId}`);
     return existing;
   }
 
@@ -69,7 +70,7 @@ export function initializeWritingPad(learnerId) {
     JSON.stringify(initialUnconscious)
   );
 
-  console.log(`[WritingPad] Created pad ${id} for learner ${learnerId}`);
+  if (!isQuietOrTranscript()) console.log(`[WritingPad] Created pad ${id} for learner ${learnerId}`);
   return getWritingPad(learnerId);
 }
 
@@ -237,7 +238,7 @@ export function promoteToPreconscious(learnerId, pattern) {
 
   stmt.run(JSON.stringify(newPreconscious), learnerId);
 
-  console.log(`[WritingPad] Promoted pattern to preconscious for learner ${learnerId}`);
+  if (!isQuietOrTranscript()) console.log(`[WritingPad] Promoted pattern to preconscious for learner ${learnerId}`);
   return getWritingPad(learnerId);
 }
 
@@ -289,7 +290,7 @@ export function settleToUnconscious(learnerId, recognitionMoment) {
     WHERE id = ?
   `).run(recognitionMoment.id);
 
-  console.log(`[WritingPad] Settled recognition moment ${recognitionMoment.id} to unconscious`);
+  if (!isQuietOrTranscript()) console.log(`[WritingPad] Settled recognition moment ${recognitionMoment.id} to unconscious`);
   return getWritingPad(learnerId);
 }
 
@@ -359,7 +360,7 @@ export function forgetStalePatterns(learnerId) {
 
     stmt.run(JSON.stringify(newPreconscious), learnerId);
 
-    console.log(`[WritingPad] Forgot ${forgottenCount} stale pattern(s) for learner ${learnerId}`);
+    if (!isQuietOrTranscript()) console.log(`[WritingPad] Forgot ${forgottenCount} stale pattern(s) for learner ${learnerId}`);
   }
 
   return getWritingPad(learnerId);
@@ -416,7 +417,7 @@ export function createRecognitionMoment(moment) {
     'conscious'                                     // persistence_layer (starts here)
   );
 
-  console.log(`[WritingPad] Created recognition moment ${id}`);
+  if (!isQuietOrTranscript()) console.log(`[WritingPad] Created recognition moment ${id}`);
   return getRecognitionMoment(id);
 }
 
