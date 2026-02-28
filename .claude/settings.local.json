@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(for f in /Users/lmagee/Dev/machinespirits-tutor-core/logs/tutor-dialogues/dialogue-*.json)",
+      "Bash(do jq '[.dialogueTrace[] | select\\(.agent==\"\"superego\"\"\\)] | length' \"$f\")",
+      "Bash(cd:*)"
+    ]
+  }
+}
