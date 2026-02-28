@@ -994,7 +994,51 @@ function extractJsonObject(text) {
  * @param {string} agentRole - Agent role for logging (e.g., 'ego', 'superego-reinterpret')
  * @param {object} options - Optional: from/to/direction overrides for logging
  */
+// Empty-content retry constants (HTTP 200 but no text — e.g. Gemini Flash)
+const EMPTY_CONTENT_MAX_RETRIES = 2;
+const EMPTY_CONTENT_RETRY_DELAYS = [1000, 2000];
+
 async function callAI(agentConfig, systemPrompt, userPrompt, agentRole = 'unknown', options = {}) {
+  const isStreaming = !!options.onToken;
+  let firstResult = null;
+
+  for (let attempt = 0; attempt <= EMPTY_CONTENT_MAX_RETRIES; attempt++) {
+    const result = await _callAIOnce(agentConfig, systemPrompt, userPrompt, agentRole, options);
+
+    // Happy path: non-empty response
+    if (result.text) return result;
+
+    // Save first result for fallback
+    if (!firstResult) firstResult = result;
+
+    // Don't retry streaming — the stream is already consumed by the caller
+    if (isStreaming) return result;
+
+    // Don't retry if outputTokens > 0 — thinking model budget exhaustion, retrying won't help
+    if (result.outputTokens > 0) return result;
+
+    // Last attempt — return what we have
+    if (attempt >= EMPTY_CONTENT_MAX_RETRIES) {
+      console.warn(
+        `[${agentRole}] Empty content persists after ${EMPTY_CONTENT_MAX_RETRIES} retries (model=${agentConfig.model}). Returning empty result.`,
+      );
+      result.emptyContentRetries = attempt;
+      return result;
+    }
+
+    // Wait and retry
+    const delay = EMPTY_CONTENT_RETRY_DELAYS[attempt];
+    console.warn(
+      `[${agentRole}] Empty content from ${agentConfig.model} (0 output tokens), retrying in ${delay}ms (attempt ${attempt + 1}/${EMPTY_CONTENT_MAX_RETRIES})`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, delay));
+  }
+
+  // Unreachable, but satisfy lint
+  return firstResult;
+}
+
+async function _callAIOnce(agentConfig, systemPrompt, userPrompt, agentRole = 'unknown', options = {}) {
   const { onToken, messageHistory = null, ...logOptions } = options;
   const { provider, providerConfig, model, hyperparameters } = agentConfig;
   let { temperature = 0.5, max_tokens = 1500, top_p } = hyperparameters;
@@ -3296,6 +3340,9 @@ export function clearRecognitionMoments() {
 
 // Export transcript utilities for multi-turn scenarios
 export { transcript, isTranscriptMode, isExpandMode, resetTranscript, parseContextSummary };
+
+// Export callAI for testability (empty-content retry wrapper + underlying single-attempt)
+export { callAI, _callAIOnce, EMPTY_CONTENT_MAX_RETRIES, EMPTY_CONTENT_RETRY_DELAYS };
 
 export default {
   runDialogue,
