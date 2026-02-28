@@ -1044,7 +1044,7 @@ async function callAI(agentConfig, systemPrompt, userPrompt, agentRole = 'unknow
 async function _callAIOnce(agentConfig, systemPrompt, userPrompt, agentRole = 'unknown', options = {}) {
   const { onToken, messageHistory = null, ...logOptions } = options;
   const { provider, providerConfig, model, hyperparameters } = agentConfig;
-  let { temperature = 0.5, max_tokens = 1500, top_p } = hyperparameters;
+  let { temperature = 0.5, max_tokens = 1500, top_p, reasoning_effort = 'low' } = hyperparameters;
 
   // Thinking/reasoning models (kimi-k2-thinking, deepseek-r1) use internal
   // chain-of-thought that consumes max_tokens. Boost significantly.
@@ -1204,6 +1204,11 @@ async function _callAIOnce(agentConfig, systemPrompt, userPrompt, agentRole = 'u
       top_p,
       messages: orMessages,
     };
+    // Constrain reasoning token budget for thinking models (e.g. Kimi K2.5, DeepSeek R1).
+    // Non-reasoning models ignore this parameter. Set via hyperparameters.reasoning_effort.
+    if (reasoning_effort) {
+      orBody.reasoning = { effort: reasoning_effort };
+    }
     if (onToken) orBody.stream = true;
 
     const res = await fetch(providerConfig.base_url, {
