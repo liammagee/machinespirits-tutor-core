@@ -1017,6 +1017,9 @@ async function callAI(agentConfig, systemPrompt, userPrompt, agentRole = 'unknow
     // Don't retry if outputTokens > 0 — thinking model budget exhaustion, retrying won't help
     if (result.outputTokens > 0) return result;
 
+    // Don't retry if finish_reason is 'length' — token budget exhausted, same max_tokens will fail again
+    if (result.finishReason === 'length') return result;
+
     // Last attempt — return what we have
     if (attempt >= EMPTY_CONTENT_MAX_RETRIES) {
       console.warn(

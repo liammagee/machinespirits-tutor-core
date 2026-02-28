@@ -110,6 +110,16 @@ describe('callAI empty-content retry', () => {
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
+  it('skips retry when finishReason is length (token budget exhausted)', async () => {
+    mockFetch.mockResolvedValueOnce(mockOpenRouterResponse({ content: '', outputTokens: 0, finishReason: 'length' }));
+
+    const result = await callAI(makeAgentConfig(), 'system', 'user', 'superego');
+
+    expect(result.text).toBe('');
+    expect(result.emptyContentRetries).toBeUndefined();
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
   it('skips retry for streaming calls (onToken set)', async () => {
     mockFetch.mockResolvedValueOnce(mockOpenRouterResponse({ content: '', outputTokens: 0 }));
 
