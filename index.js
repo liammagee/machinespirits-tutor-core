@@ -47,7 +47,11 @@ export {
   getAvailableProfiles,
   analyzeInterventionNeeds,
   setLogDir,
-  setQuietMode
+  setQuietMode,
+  _fetchProvider,
+  isContextOverflowError,
+  truncateForContextOverflow,
+  extractStructuredSummary
 } from './services/tutorDialogueEngine.js';
 
 export {

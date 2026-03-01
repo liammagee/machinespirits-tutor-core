@@ -998,101 +998,56 @@ function extractJsonObject(text) {
 const EMPTY_CONTENT_MAX_RETRIES = 2;
 const EMPTY_CONTENT_RETRY_DELAYS = [1000, 2000];
 
-async function callAI(agentConfig, systemPrompt, userPrompt, agentRole = 'unknown', options = {}) {
-  const isStreaming = !!options.onToken;
-  let firstResult = null;
+// ============================================================================
+// Shared low-level provider fetch — used by both tutor (_callAIOnce) and
+// learner (_callLearnerAIOnce via import). Contains ONLY the HTTP fetch +
+// response parsing for each provider. Callers wrap the result into their
+// own shapes (tutor: logApiCall; learner: apiPayload capture).
+// ============================================================================
 
-  for (let attempt = 0; attempt <= EMPTY_CONTENT_MAX_RETRIES; attempt++) {
-    const result = await _callAIOnce(agentConfig, systemPrompt, userPrompt, agentRole, options);
+/**
+ * Low-level provider fetch: sends a request and parses the response.
+ *
+ * @param {Object} opts
+ * @param {string} opts.provider - Provider name (anthropic, openai, openrouter, gemini, local, lmstudio)
+ * @param {Object} opts.providerConfig - { base_url, apiKey, isConfigured, ... }
+ * @param {string} opts.model - Model ID
+ * @param {Array}  opts.messages - Pre-built message array (caller is responsible for assembly)
+ * @param {string} [opts.systemPrompt] - Separate system prompt for Anthropic (top-level `system`) and Gemini (`systemInstruction`)
+ * @param {Object} [opts.hyperparameters] - { temperature, max_tokens, top_p, reasoning_effort }
+ * @param {Function} [opts.onToken] - Streaming callback (null for learner)
+ * @returns {Promise<{text: string, inputTokens: number, outputTokens: number, finishReason?: string, rawResponse?: Object, cost?: number, generationId?: string, contextOverflow?: boolean, errorMessage?: string}>}
+ */
+async function _fetchProvider({
+  provider,
+  providerConfig,
+  model,
+  messages,
+  systemPrompt = '',
+  hyperparameters = {},
+  onToken = null,
+}) {
+  const { temperature = 0.5, max_tokens = 1500, top_p, reasoning_effort = 'low' } = hyperparameters;
 
-    // Happy path: non-empty response
-    if (result.text) return result;
-
-    // Save first result for fallback
-    if (!firstResult) firstResult = result;
-
-    // Don't retry streaming — the stream is already consumed by the caller
-    if (isStreaming) return result;
-
-    // Don't retry if outputTokens > 0 — thinking model budget exhaustion, retrying won't help
-    if (result.outputTokens > 0) return result;
-
-    // Don't retry if finish_reason is 'length' — token budget exhausted, same max_tokens will fail again
-    if (result.finishReason === 'length') return result;
-
-    // Last attempt — return what we have
-    if (attempt >= EMPTY_CONTENT_MAX_RETRIES) {
-      console.warn(
-        `[${agentRole}] Empty content persists after ${EMPTY_CONTENT_MAX_RETRIES} retries (model=${agentConfig.model}). Returning empty result.`,
-      );
-      result.emptyContentRetries = attempt;
-      return result;
-    }
-
-    // Wait and retry
-    const delay = EMPTY_CONTENT_RETRY_DELAYS[attempt];
-    console.warn(
-      `[${agentRole}] Empty content from ${agentConfig.model} (0 output tokens), retrying in ${delay}ms (attempt ${attempt + 1}/${EMPTY_CONTENT_MAX_RETRIES})`,
-    );
-    await new Promise((resolve) => setTimeout(resolve, delay));
-  }
-
-  // Unreachable, but satisfy lint
-  return firstResult;
-}
-
-async function _callAIOnce(agentConfig, systemPrompt, userPrompt, agentRole = 'unknown', options = {}) {
-  const { onToken, messageHistory = null, ...logOptions } = options;
-  const { provider, providerConfig, model, hyperparameters } = agentConfig;
-  let { temperature = 0.5, max_tokens = 1500, top_p, reasoning_effort = 'low' } = hyperparameters;
-
-  // Thinking/reasoning models (kimi-k2-thinking, deepseek-r1) use internal
-  // chain-of-thought that consumes max_tokens. Boost significantly.
-  // Note: kimi-k2.5 (non-thinking) does NOT need this — it's a separate model.
-  const isThinkingModel = model?.includes('kimi-k2-thinking') || model?.includes('deepseek-r1');
-  if (isThinkingModel && max_tokens < 8000) {
-    max_tokens = 8000;
-  }
-
-  if (!providerConfig.isConfigured) {
+  if (!providerConfig?.isConfigured) {
     throw new Error(`Provider ${provider} not configured (missing API key)`);
   }
 
   const startTime = Date.now();
 
-  // Combine for logging (preserves existing log format)
-  const prompt = `${systemPrompt}\n\n${userPrompt}`;
-
+  // --- Anthropic ---
   if (provider === 'anthropic') {
-    // Anthropic uses a top-level `system` field (not a message role) which
-    // enables automatic prompt caching of the static prefix.
-    // Anthropic requires strictly alternating user/assistant roles.
-    let messages;
-    let effectiveSystem;
-    if (messageHistory?.length) {
-      // Message-chain mode: fold userPrompt (context/curriculum/task) into system,
-      // keep messages as the clean conversation chain
-      effectiveSystem = `${systemPrompt}\n\n${userPrompt}`;
-      messages = [...messageHistory];
-    } else {
-      effectiveSystem = systemPrompt;
-      messages = [{ role: 'user', content: userPrompt }];
-    }
-
     const bodyParams = {
       model,
       max_tokens,
       temperature,
-      system: effectiveSystem,
+      system: systemPrompt,
       messages,
     };
-    // Only add top_p if explicitly provided (and then omit temperature per Anthropic rules)
     if (top_p !== undefined) {
       delete bodyParams.temperature;
       bodyParams.top_p = top_p;
     }
-
-    // Enable streaming when onToken callback is provided
     if (onToken) bodyParams.stream = true;
 
     const res = await fetch(providerConfig.base_url, {
@@ -1123,31 +1078,17 @@ async function _callAIOnce(agentConfig, systemPrompt, userPrompt, agentRole = 'u
       outputTokens = data?.usage?.output_tokens;
     }
 
-    const result = {
-      text,
-      model,
-      provider,
-      latencyMs: Date.now() - startTime,
-      inputTokens,
-      outputTokens,
-    };
-
-    logApiCall(agentRole, 'anthropic_call', { prompt, response: text, ...result }, logOptions);
-    return result;
+    return { text, inputTokens, outputTokens, latencyMs: Date.now() - startTime };
   }
 
+  // --- OpenAI ---
   if (provider === 'openai') {
-    // Message-chain mode: fold userPrompt into system, messages = clean conversation
-    const openaiMessages = messageHistory?.length
-      ? [{ role: 'system', content: `${systemPrompt}\n\n${userPrompt}` }, ...messageHistory]
-      : [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }];
-
     const openaiBody = {
       model,
       temperature,
       max_tokens,
       top_p,
-      messages: openaiMessages,
+      messages,
     };
     if (onToken) openaiBody.stream = true;
 
@@ -1178,34 +1119,18 @@ async function _callAIOnce(agentConfig, systemPrompt, userPrompt, agentRole = 'u
       outputTokens = data?.usage?.completion_tokens;
     }
 
-    const result = {
-      text,
-      model,
-      provider,
-      latencyMs: Date.now() - startTime,
-      inputTokens,
-      outputTokens,
-    };
-
-    logApiCall(agentRole, 'openai_call', { prompt, response: text, ...result }, logOptions);
-    return result;
+    return { text, inputTokens, outputTokens, latencyMs: Date.now() - startTime };
   }
 
+  // --- OpenRouter ---
   if (provider === 'openrouter') {
-    // Message-chain mode: fold userPrompt into system, messages = clean conversation
-    const orMessages = messageHistory?.length
-      ? [{ role: 'system', content: `${systemPrompt}\n\n${userPrompt}` }, ...messageHistory]
-      : [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }];
-
     const orBody = {
       model,
       temperature,
       max_tokens,
       top_p,
-      messages: orMessages,
+      messages,
     };
-    // Constrain reasoning token budget for thinking models (e.g. Kimi K2.5, DeepSeek R1).
-    // Non-reasoning models ignore this parameter. Set via hyperparameters.reasoning_effort.
     if (reasoning_effort) {
       orBody.reasoning = { effort: reasoning_effort };
     }
@@ -1242,84 +1167,40 @@ async function _callAIOnce(agentConfig, systemPrompt, userPrompt, agentRole = 'u
       generationId = data?.id;
       cost = data?.usage?.cost || 0;
 
-      // Log warning if response is empty (model may have failed silently)
       if (!text) {
         const reason = data?.choices?.[0]?.finish_reason || 'unknown';
         const reasoning = data?.usage?.completion_tokens_details?.reasoning_tokens;
         const reasoningNote = reasoning ? `, reasoning=${reasoning}` : '';
-        console.warn(`[${agentRole}] Empty content from ${data?.model || model} (finish=${reason}, ${inputTokens}in/${outputTokens}out${reasoningNote})`);
+        console.warn(`[_fetchProvider] Empty content from ${data?.model || model} (finish=${reason}, ${inputTokens}in/${outputTokens}out${reasoningNote})`);
       }
     }
 
-    const result = {
-      text,
-      model,
-      provider,
-      latencyMs: Date.now() - startTime,
-      inputTokens,
-      outputTokens,
-      finishReason,
-      generationId,
-      cost,
-    };
-
-    logApiCall(agentRole, 'openrouter_call', { prompt, response: text, ...result }, logOptions);
-
-    return result;
+    return { text, inputTokens, outputTokens, finishReason, generationId, cost, latencyMs: Date.now() - startTime };
   }
 
+  // --- Gemini ---
   if (provider === 'gemini') {
-    // Gemini uses a different API structure with 'user'/'model' roles (not 'assistant')
-    // and requires alternating roles.
     const { GoogleGenAI } = await import('@google/genai');
     const gemini = new GoogleGenAI({ apiKey: providerConfig.apiKey });
 
-    let geminiContents;
-    let geminiSystem;
-    if (messageHistory?.length) {
-      // Message-chain mode: fold userPrompt into system, contents = clean conversation
-      geminiSystem = `${systemPrompt}\n\n${userPrompt}`;
-      geminiContents = [];
-      for (const msg of messageHistory) {
-        const geminiRole = msg.role === 'assistant' ? 'model' : 'user';
-        geminiContents.push({ role: geminiRole, parts: [{ text: msg.content }] });
-      }
-    } else {
-      geminiSystem = systemPrompt;
-      geminiContents = [{ role: 'user', parts: [{ text: userPrompt }] }];
-    }
-
     const result = await gemini.models.generateContent({
       model,
-      systemInstruction: geminiSystem,
-      contents: geminiContents,
+      systemInstruction: systemPrompt,
+      contents: messages, // Caller must provide Gemini-format contents
       config: { temperature, maxOutputTokens: max_tokens, topP: top_p },
     });
 
     const text = result?.text?.() || result?.response?.text?.() || '';
-    const apiResult = {
-      text,
-      model,
-      provider,
-      latencyMs: Date.now() - startTime,
-    };
-
-    logApiCall(agentRole, 'gemini_call', { prompt, response: text, ...apiResult }, logOptions);
-    return apiResult;
+    return { text, inputTokens: 0, outputTokens: 0, latencyMs: Date.now() - startTime };
   }
 
+  // --- Local / LMStudio ---
   if (provider === 'local' || provider === 'lmstudio') {
-    // Local LLM provider (LM Studio, Ollama, llama.cpp)
-    // Message-chain mode: fold userPrompt into system, messages = clean conversation
-    const localMessages = messageHistory?.length
-      ? [{ role: 'system', content: `${systemPrompt}\n\n${userPrompt}` }, ...messageHistory]
-      : [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }];
-
     const localBody = {
       model,
       temperature,
       max_tokens,
-      messages: localMessages,
+      messages,
     };
     if (onToken) localBody.stream = true;
 
@@ -1336,7 +1217,22 @@ async function _callAIOnce(agentConfig, systemPrompt, userPrompt, agentRole = 'u
 
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      throw new Error(`Local LLM error: ${res.status} - ${data?.error?.message || 'Is LM Studio running?'}`);
+      // LMStudio uses { error: "message" } (string) not { error: { message: "..." } } (object)
+      const errMsg = typeof data?.error === 'string' ? data.error : data?.error?.message;
+
+      // Detect context overflow for local/lmstudio providers
+      if (isContextOverflowError(res.status, errMsg)) {
+        return {
+          text: '',
+          contextOverflow: true,
+          errorMessage: errMsg || `Context overflow (HTTP ${res.status})`,
+          inputTokens: 0,
+          outputTokens: 0,
+          latencyMs: Date.now() - startTime,
+        };
+      }
+
+      throw new Error(`Local LLM error: ${res.status} - ${errMsg || 'Is LM Studio running?'}`);
     }
 
     let text, inputTokens, outputTokens;
@@ -1352,20 +1248,235 @@ async function _callAIOnce(agentConfig, systemPrompt, userPrompt, agentRole = 'u
       outputTokens = data?.usage?.completion_tokens;
     }
 
-    const result = {
-      text,
-      model,
-      provider,
-      latencyMs: Date.now() - startTime,
-      inputTokens,
-      outputTokens,
-    };
-
-    logApiCall(agentRole, 'local_call', { prompt, response: text, ...result }, logOptions);
-    return result;
+    return { text, inputTokens, outputTokens, latencyMs: Date.now() - startTime, rawResponse: { status: res.status } };
   }
 
   throw new Error(`Unsupported provider: ${provider}`);
+}
+
+// ============================================================================
+// Context overflow detection and truncation helpers
+// ============================================================================
+
+/**
+ * Detect context-window overflow errors from local/LMStudio/Ollama providers.
+ * Only relevant for local providers with small context windows.
+ */
+function isContextOverflowError(status, errorMessage) {
+  if (!errorMessage) return false;
+  const msg = errorMessage.toLowerCase();
+  return (
+    (status === 400 || status === 500) &&
+    (msg.includes('tokens to keep from the initial prompt') ||
+     msg.includes('context length') ||
+     msg.includes('context window') ||
+     msg.includes('model has crashed'))
+  );
+}
+
+/**
+ * Progressive truncation for context overflow recovery.
+ * Level 1: Drop simulations section, replace learner context with structured summary.
+ * Level 2: Level 1 + truncate curriculum to ~500 chars, truncate systemPrompt to ~1500 chars.
+ *
+ * @param {string} systemPrompt - The system prompt
+ * @param {string} userPrompt - The user prompt (learner context, curriculum, etc.)
+ * @param {number} level - Truncation level (1 or 2)
+ * @returns {{ systemPrompt: string, userPrompt: string }}
+ */
+function truncateForContextOverflow(systemPrompt, userPrompt, level = 1) {
+  let truncatedSystem = systemPrompt;
+  let truncatedUser = userPrompt;
+
+  if (level >= 1) {
+    // Drop "## Available Simulations" section from userPrompt
+    truncatedUser = truncatedUser.replace(/## Available Simulations\n[\s\S]*?(?=\n## |\n$|$)/, '');
+
+    // Replace detailed learner context with structured summary if available
+    const summary = extractStructuredSummary(truncatedUser);
+    if (summary) {
+      truncatedUser = summary;
+    }
+  }
+
+  if (level >= 2) {
+    // Truncate "## Available Curriculum" to ~500 chars (line boundary)
+    const curriculumMatch = truncatedUser.match(/(## Available Curriculum\n)([\s\S]*?)(?=\n## |\n$|$)/);
+    if (curriculumMatch) {
+      const header = curriculumMatch[1];
+      const body = curriculumMatch[2];
+      if (body.length > 500) {
+        const truncated = body.slice(0, 500).replace(/\n[^\n]*$/, ''); // Truncate at line boundary
+        truncatedUser = truncatedUser.replace(
+          curriculumMatch[0],
+          `${header}${truncated}\n... [truncated for context limit]`,
+        );
+      }
+    }
+
+    // Truncate systemPrompt to ~1500 chars
+    if (truncatedSystem.length > 1500) {
+      truncatedSystem = truncatedSystem.slice(0, 1500).replace(/\n[^\n]*$/, '') + '\n... [truncated for context limit]';
+    }
+  }
+
+  return { systemPrompt: truncatedSystem, userPrompt: truncatedUser };
+}
+
+async function callAI(agentConfig, systemPrompt, userPrompt, agentRole = 'unknown', options = {}) {
+  const isStreaming = !!options.onToken;
+
+  // Phase 0: Context overflow retry (local/lmstudio only — progressive truncation)
+  let effectiveSystemPrompt = systemPrompt;
+  let effectiveUserPrompt = userPrompt;
+  const MAX_OVERFLOW_RETRIES = 2;
+
+  for (let overflowLevel = 0; overflowLevel <= MAX_OVERFLOW_RETRIES; overflowLevel++) {
+    const result = await _callAIOnce(agentConfig, effectiveSystemPrompt, effectiveUserPrompt, agentRole, options);
+
+    // Context overflow: apply progressive truncation and retry
+    if (result.contextOverflow && overflowLevel < MAX_OVERFLOW_RETRIES) {
+      const nextLevel = overflowLevel + 1;
+      const beforeLen = effectiveSystemPrompt.length + effectiveUserPrompt.length;
+      const truncated = truncateForContextOverflow(systemPrompt, userPrompt, nextLevel);
+      effectiveSystemPrompt = truncated.systemPrompt;
+      effectiveUserPrompt = truncated.userPrompt;
+      const afterLen = effectiveSystemPrompt.length + effectiveUserPrompt.length;
+      console.warn(
+        `[${agentRole}] Context overflow from ${agentConfig.model}, truncating level ${nextLevel} (${beforeLen} → ${afterLen} chars)`,
+      );
+      continue;
+    }
+
+    // Context overflow after max retries — throw clear error
+    if (result.contextOverflow) {
+      throw new Error(
+        `Context overflow for ${agentConfig.model} even after level-${MAX_OVERFLOW_RETRIES} truncation. ` +
+        `Error: ${result.errorMessage}`,
+      );
+    }
+
+    // Phase 1: Empty-content retry (HTTP 200 but no text)
+    if (result.text) return result;
+
+    // Don't retry streaming — the stream is already consumed by the caller
+    if (isStreaming) return result;
+
+    // Don't retry if outputTokens > 0 — thinking model budget exhaustion, retrying won't help
+    if (result.outputTokens > 0) return result;
+
+    // Don't retry if finish_reason is 'length' — token budget exhausted, same max_tokens will fail again
+    if (result.finishReason === 'length') return result;
+
+    // Empty content — enter retry loop
+    let firstResult = result;
+    for (let attempt = 0; attempt < EMPTY_CONTENT_MAX_RETRIES; attempt++) {
+      const delay = EMPTY_CONTENT_RETRY_DELAYS[attempt];
+      console.warn(
+        `[${agentRole}] Empty content from ${agentConfig.model} (0 output tokens), retrying in ${delay}ms (attempt ${attempt + 1}/${EMPTY_CONTENT_MAX_RETRIES})`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, delay));
+
+      const retryResult = await _callAIOnce(agentConfig, effectiveSystemPrompt, effectiveUserPrompt, agentRole, options);
+      if (retryResult.text) {
+        retryResult.emptyContentRetries = attempt + 1;
+        return retryResult;
+      }
+      if (retryResult.outputTokens > 0) return retryResult;
+      if (retryResult.finishReason === 'length') return retryResult;
+      firstResult = retryResult;
+    }
+
+    console.warn(
+      `[${agentRole}] Empty content persists after ${EMPTY_CONTENT_MAX_RETRIES} retries (model=${agentConfig.model}). Returning empty result.`,
+    );
+    firstResult.emptyContentRetries = EMPTY_CONTENT_MAX_RETRIES;
+    return firstResult;
+  }
+
+  // Unreachable, but satisfy lint
+  throw new Error(`callAI: unexpected exit from overflow retry loop`);
+}
+
+async function _callAIOnce(agentConfig, systemPrompt, userPrompt, agentRole = 'unknown', options = {}) {
+  const { onToken, messageHistory = null, ...logOptions } = options;
+  const { provider, providerConfig, model, hyperparameters } = agentConfig;
+  let { temperature = 0.5, max_tokens = 1500, top_p, reasoning_effort = 'low' } = hyperparameters;
+
+  // Thinking/reasoning models (kimi-k2-thinking, deepseek-r1) use internal
+  // chain-of-thought that consumes max_tokens. Boost significantly.
+  // Note: kimi-k2.5 (non-thinking) does NOT need this — it's a separate model.
+  const isThinkingModel = model?.includes('kimi-k2-thinking') || model?.includes('deepseek-r1');
+  if (isThinkingModel && max_tokens < 8000) {
+    max_tokens = 8000;
+  }
+
+  // Combine for logging (preserves existing log format)
+  const prompt = `${systemPrompt}\n\n${userPrompt}`;
+
+  // Build provider-specific messages and system prompt
+  let messages;
+  let effectiveSystem;
+  if (provider === 'anthropic') {
+    // Anthropic uses a top-level `system` field; requires strictly alternating user/assistant roles
+    if (messageHistory?.length) {
+      effectiveSystem = `${systemPrompt}\n\n${userPrompt}`;
+      messages = [...messageHistory];
+    } else {
+      effectiveSystem = systemPrompt;
+      messages = [{ role: 'user', content: userPrompt }];
+    }
+  } else if (provider === 'gemini') {
+    // Gemini: system via systemInstruction, contents in {role, parts} format
+    if (messageHistory?.length) {
+      effectiveSystem = `${systemPrompt}\n\n${userPrompt}`;
+      messages = [];
+      for (const msg of messageHistory) {
+        const geminiRole = msg.role === 'assistant' ? 'model' : 'user';
+        messages.push({ role: geminiRole, parts: [{ text: msg.content }] });
+      }
+    } else {
+      effectiveSystem = systemPrompt;
+      messages = [{ role: 'user', parts: [{ text: userPrompt }] }];
+    }
+  } else {
+    // OpenAI, OpenRouter, local, lmstudio: standard {role, content} messages with system role
+    messages = messageHistory?.length
+      ? [{ role: 'system', content: `${systemPrompt}\n\n${userPrompt}` }, ...messageHistory]
+      : [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }];
+    effectiveSystem = systemPrompt; // Not used by _fetchProvider for these providers
+  }
+
+  // Delegate to shared fetch
+  const raw = await _fetchProvider({
+    provider,
+    providerConfig,
+    model,
+    messages,
+    systemPrompt: effectiveSystem,
+    hyperparameters: { temperature, max_tokens, top_p, reasoning_effort },
+    onToken,
+  });
+
+  // Wrap into tutor result shape
+  const result = {
+    text: raw.text,
+    model,
+    provider,
+    latencyMs: raw.latencyMs,
+    inputTokens: raw.inputTokens,
+    outputTokens: raw.outputTokens,
+    ...(raw.finishReason != null && { finishReason: raw.finishReason }),
+    ...(raw.generationId != null && { generationId: raw.generationId }),
+    ...(raw.cost != null && { cost: raw.cost }),
+    ...(raw.contextOverflow && { contextOverflow: true, errorMessage: raw.errorMessage }),
+  };
+
+  // Log the API call (tutor-only concern)
+  const actionLabel = provider === 'local' || provider === 'lmstudio' ? 'local_call' : `${provider}_call`;
+  logApiCall(agentRole, actionLabel, { prompt, response: raw.text, ...result }, logOptions);
+
+  return result;
 }
 
 /**
@@ -1391,7 +1502,7 @@ async function superegoReinterpretSignals(learnerContext, options = {}) {
         model: resolved.model,
         providerConfig: {
           ...superegoConfig.providerConfig,
-          apiKey: resolved.apiKey || superegoConfig.providerConfig?.apiKey,
+          apiKey: resolved.apiKey != null ? resolved.apiKey : superegoConfig.providerConfig?.apiKey,
           base_url: resolved.baseUrl || superegoConfig.providerConfig?.base_url,
           isConfigured: resolved.isConfigured ?? superegoConfig.providerConfig?.isConfigured,
         },
@@ -1491,7 +1602,7 @@ async function egoGenerateSuggestions(learnerContext, curriculumContext, simulat
         model: resolved.model,
         providerConfig: {
           ...egoConfig.providerConfig,
-          apiKey: resolved.apiKey || egoConfig.providerConfig?.apiKey,
+          apiKey: resolved.apiKey != null ? resolved.apiKey : egoConfig.providerConfig?.apiKey,
           base_url: resolved.baseUrl || egoConfig.providerConfig?.base_url,
           isConfigured: resolved.isConfigured ?? egoConfig.providerConfig?.isConfigured,
         },
@@ -1852,7 +1963,7 @@ async function superegoReview(egoSuggestions, learnerContext, options = {}) {
         model: resolved.model,
         providerConfig: {
           ...superegoConfig.providerConfig,
-          apiKey: resolved.apiKey || superegoConfig.providerConfig?.apiKey,
+          apiKey: resolved.apiKey != null ? resolved.apiKey : superegoConfig.providerConfig?.apiKey,
           base_url: resolved.baseUrl || superegoConfig.providerConfig?.base_url,
           isConfigured: resolved.isConfigured ?? superegoConfig.providerConfig?.isConfigured,
         },
@@ -1954,7 +2065,7 @@ async function egoRevise(originalSuggestions, superegoFeedback, learnerContext, 
         model: resolved.model,
         providerConfig: {
           ...egoConfig.providerConfig,
-          apiKey: resolved.apiKey || egoConfig.providerConfig?.apiKey,
+          apiKey: resolved.apiKey != null ? resolved.apiKey : egoConfig.providerConfig?.apiKey,
           base_url: resolved.baseUrl || egoConfig.providerConfig?.base_url,
           isConfigured: resolved.isConfigured ?? egoConfig.providerConfig?.isConfigured,
         },
@@ -2164,7 +2275,7 @@ export async function runDialogue(context, options = {}) {
         model: resolved.model,
         providerConfig: {
           ...egoConfig.providerConfig,
-          apiKey: resolved.apiKey || egoConfig.providerConfig?.apiKey,
+          apiKey: resolved.apiKey != null ? resolved.apiKey : egoConfig.providerConfig?.apiKey,
           base_url: resolved.baseUrl || egoConfig.providerConfig?.base_url,
           isConfigured: resolved.isConfigured ?? egoConfig.providerConfig?.isConfigured,
         },
@@ -3383,7 +3494,7 @@ export function clearRecognitionMoments() {
 export { transcript, isTranscriptMode, isExpandMode, resetTranscript, parseContextSummary };
 
 // Export callAI for testability (empty-content retry wrapper + underlying single-attempt)
-export { callAI, _callAIOnce, EMPTY_CONTENT_MAX_RETRIES, EMPTY_CONTENT_RETRY_DELAYS };
+export { callAI, _callAIOnce, _fetchProvider, isContextOverflowError, truncateForContextOverflow, extractStructuredSummary, EMPTY_CONTENT_MAX_RETRIES, EMPTY_CONTENT_RETRY_DELAYS };
 
 export default {
   runDialogue,
