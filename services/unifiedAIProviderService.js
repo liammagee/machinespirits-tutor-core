@@ -889,13 +889,16 @@ async function buildStreamRequest(provider, model, systemPrompt, messages, confi
 
     case 'local':
     case 'lmstudio': {
-      const baseUrl = process.env.LOCAL_AI_URL || 'http://localhost:1234';
-      const endpoint = baseUrl.replace(/\/+$/, '').replace(/\/v1\/chat\/completions$/, '') + '/v1/chat/completions';
+      const localBaseUrl = config.providerConfig?.base_url || process.env.LOCAL_AI_URL || 'http://localhost:1234';
+      const endpoint = localBaseUrl.replace(/\/+$/, '').replace(/\/v1\/chat\/completions$/, '') + '/v1/chat/completions';
       const effectiveModel = model || 'local-model';
+      const localHeaders = { 'Content-Type': 'application/json' };
+      const localApiKey = config.providerConfig?.apiKey;
+      if (localApiKey) localHeaders['Authorization'] = `Bearer ${localApiKey}`;
       return {
         response: await fetch(endpoint, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: localHeaders,
           body: JSON.stringify({
             model: effectiveModel,
             temperature: config.temperature ?? 0.7,
@@ -909,7 +912,7 @@ async function buildStreamRequest(provider, model, systemPrompt, messages, confi
         }),
         format: 'openai',
         model: effectiveModel,
-        provider: 'local',
+        provider: normalizedProvider,
       };
     }
 

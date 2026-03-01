@@ -1,5 +1,5 @@
 # Recognition Evaluation Guide for AI Judges
-
+<!-- version: 1.0 -->
 This document provides supplementary guidance for evaluating tutor suggestions on the **recognition dimensions** introduced in Phase 5 of the Recognition Engine.
 
 ## Theoretical Background

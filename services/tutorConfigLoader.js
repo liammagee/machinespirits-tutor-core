@@ -99,6 +99,7 @@ export { loadProviders };
 // Re-export prompt loading utilities
 export const loadPrompt = promptLoader.loadPrompt;
 export const getPromptCacheStatus = promptLoader.getPromptCacheStatus;
+export const getPromptMetadata = promptLoader.getPromptMetadata;
 
 // ============================================================================
 // Tutor-Specific Functions
@@ -362,6 +363,7 @@ export default {
   getSuperegoStrategy,
   listSuperegoStrategies,
   loadPrompt,
+  getPromptMetadata,
   reloadAllPrompts,
   onPromptsReload,
   getPromptCacheStatus,

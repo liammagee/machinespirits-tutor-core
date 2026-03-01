@@ -1308,7 +1308,7 @@ async function _callAIOnce(agentConfig, systemPrompt, userPrompt, agentRole = 'u
     return apiResult;
   }
 
-  if (provider === 'local') {
+  if (provider === 'local' || provider === 'lmstudio') {
     // Local LLM provider (LM Studio, Ollama, llama.cpp)
     // Message-chain mode: fold userPrompt into system, messages = clean conversation
     const localMessages = messageHistory?.length
@@ -1323,11 +1323,14 @@ async function _callAIOnce(agentConfig, systemPrompt, userPrompt, agentRole = 'u
     };
     if (onToken) localBody.stream = true;
 
+    const localHeaders = { 'Content-Type': 'application/json' };
+    if (providerConfig.apiKey) {
+      localHeaders['Authorization'] = `Bearer ${providerConfig.apiKey}`;
+    }
+
     const res = await fetch(providerConfig.base_url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: localHeaders,
       body: JSON.stringify(localBody),
     });
 
@@ -1482,7 +1485,17 @@ async function egoGenerateSuggestions(learnerContext, curriculumContext, simulat
   if (egoModel) {
     const resolved = configLoader.resolveModel(egoModel);
     if (resolved && resolved.model) {
-      egoConfig = { ...egoConfig, provider: resolved.provider, model: resolved.model };
+      egoConfig = {
+        ...egoConfig,
+        provider: resolved.provider,
+        model: resolved.model,
+        providerConfig: {
+          ...egoConfig.providerConfig,
+          apiKey: resolved.apiKey || egoConfig.providerConfig?.apiKey,
+          base_url: resolved.baseUrl || egoConfig.providerConfig?.base_url,
+          isConfigured: resolved.isConfigured ?? egoConfig.providerConfig?.isConfigured,
+        },
+      };
     }
   }
 
@@ -1935,7 +1948,17 @@ async function egoRevise(originalSuggestions, superegoFeedback, learnerContext, 
   if (egoModel) {
     const resolved = configLoader.resolveModel(egoModel);
     if (resolved && resolved.model) {
-      egoConfig = { ...egoConfig, provider: resolved.provider, model: resolved.model };
+      egoConfig = {
+        ...egoConfig,
+        provider: resolved.provider,
+        model: resolved.model,
+        providerConfig: {
+          ...egoConfig.providerConfig,
+          apiKey: resolved.apiKey || egoConfig.providerConfig?.apiKey,
+          base_url: resolved.baseUrl || egoConfig.providerConfig?.base_url,
+          isConfigured: resolved.isConfigured ?? egoConfig.providerConfig?.isConfigured,
+        },
+      };
     }
   }
 
@@ -2135,7 +2158,17 @@ export async function runDialogue(context, options = {}) {
   if (egoModel && egoConfig) {
     const resolved = configLoader.resolveModel(egoModel);
     if (resolved && resolved.model) {
-      egoConfig = { ...egoConfig, provider: resolved.provider, model: resolved.model };
+      egoConfig = {
+        ...egoConfig,
+        provider: resolved.provider,
+        model: resolved.model,
+        providerConfig: {
+          ...egoConfig.providerConfig,
+          apiKey: resolved.apiKey || egoConfig.providerConfig?.apiKey,
+          base_url: resolved.baseUrl || egoConfig.providerConfig?.base_url,
+          isConfigured: resolved.isConfigured ?? egoConfig.providerConfig?.isConfigured,
+        },
+      };
       if (!isQuietOrTranscript()) console.log(`[Dialogue] Ego model override: ${egoModel} -> ${resolved.model}`);
     }
   }

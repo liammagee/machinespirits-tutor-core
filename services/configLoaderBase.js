@@ -12,6 +12,7 @@
 import fs from 'fs';
 import path from 'path';
 import yaml from 'yaml';
+import { createHash } from 'crypto';
 import { fileURLToPath } from 'url';
 
 // Resolve paths relative to this module
@@ -146,9 +147,9 @@ export function resolveProviderConfig(providers, providerName) {
   // Resolve API key from environment (if required)
   const apiKey = provider.api_key_env ? (process.env[provider.api_key_env] || '') : '';
 
-  // Local provider doesn't need an API key - just needs base_url
-  const isLocal = providerName === 'local';
-  const isConfigured = isLocal ? Boolean(provider.base_url) : Boolean(apiKey);
+  // Providers without api_key_env (local, lmstudio, etc.) only need base_url
+  const needsApiKey = Boolean(provider.api_key_env);
+  const isConfigured = needsApiKey ? Boolean(apiKey) : Boolean(provider.base_url);
 
   return {
     ...provider,
@@ -284,9 +285,16 @@ export function createPromptLoader(defaultPromptFn = null) {
       // Remove markdown title (first line starting with #)
       const content = rawContent.replace(/^#[^\n]*\n+/, '').trim();
 
+      // Extract version from <!-- version: X.Y --> comment
+      const versionMatch = rawContent.match(/<!--\s*version:\s*([\d.]+)\s*-->/);
+      const version = versionMatch ? versionMatch[1] : null;
+
+      // Compute 16-char SHA-256 content hash (of the raw file, not stripped content)
+      const contentHash = createHash('sha256').update(rawContent).digest('hex').slice(0, 16);
+
       // Track if this was a change (for hot reload logging)
       const wasChanged = cached && cached.mtime !== stats.mtimeMs;
-      promptCache.set(filename, { content, mtime: stats.mtimeMs });
+      promptCache.set(filename, { content, mtime: stats.mtimeMs, version, contentHash });
 
       if (wasChanged) {
         console.log(`[Hot Reload] Prompt reloaded: ${filename}`);
@@ -342,11 +350,32 @@ export function createPromptLoader(defaultPromptFn = null) {
     return Array.from(promptCache.keys());
   }
 
+  /**
+   * Get version and content hash metadata for a prompt file.
+   * Triggers a load if the file is not yet cached.
+   *
+   * @param {string} filename - Prompt filename
+   * @returns {{ version: string|null, contentHash: string, filename: string }}
+   */
+  function getPromptMetadata(filename) {
+    // Ensure the file is loaded (populates cache with version + hash)
+    if (!promptCache.has(filename)) {
+      loadPrompt(filename);
+    }
+    const cached = promptCache.get(filename);
+    return {
+      version: cached?.version || null,
+      contentHash: cached?.contentHash || null,
+      filename,
+    };
+  }
+
   return {
     loadPrompt,
     clearPromptCache,
     getPromptCacheStatus,
     getCachedPrompts,
+    getPromptMetadata,
   };
 }
 
