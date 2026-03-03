@@ -1196,6 +1196,12 @@ async function _fetchProvider({
 
   // --- Local / LMStudio ---
   if (provider === 'local' || provider === 'lmstudio') {
+    const contextDiagnostics = getLocalContextDiagnostics({
+      providerConfig,
+      messages,
+      maxTokens: max_tokens,
+      errorMessage: '',
+    });
     const localBody = {
       model,
       temperature,
@@ -1209,30 +1215,51 @@ async function _fetchProvider({
       localHeaders['Authorization'] = `Bearer ${providerConfig.apiKey}`;
     }
 
-    const res = await fetch(providerConfig.base_url, {
-      method: 'POST',
-      headers: localHeaders,
-      body: JSON.stringify(localBody),
-    });
+    let res;
+    try {
+      res = await fetch(providerConfig.base_url, {
+        method: 'POST',
+        headers: localHeaders,
+        body: JSON.stringify(localBody),
+      });
+    } catch (error) {
+      const diagText = formatLocalContextDiagnostics(contextDiagnostics);
+      const errorDetail = error?.message || 'Unknown fetch error';
+      throw new Error(
+        `Local LLM fetch failed for ${model} at ${providerConfig.base_url}: ${errorDetail}` +
+          (diagText ? ` [${diagText}]` : ''),
+      );
+    }
 
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
       // LMStudio uses { error: "message" } (string) not { error: { message: "..." } } (object)
       const errMsg = typeof data?.error === 'string' ? data.error : data?.error?.message;
+      const detailedDiagnostics = getLocalContextDiagnostics({
+        providerConfig,
+        messages,
+        maxTokens: max_tokens,
+        errorMessage: errMsg,
+      });
+      const diagText = formatLocalContextDiagnostics(detailedDiagnostics);
+      const detailedErrorMessage =
+        (errMsg || `Context overflow (HTTP ${res.status})`) + (diagText ? ` [${diagText}]` : '');
 
       // Detect context overflow for local/lmstudio providers
       if (isContextOverflowError(res.status, errMsg)) {
         return {
           text: '',
           contextOverflow: true,
-          errorMessage: errMsg || `Context overflow (HTTP ${res.status})`,
+          errorMessage: detailedErrorMessage,
           inputTokens: 0,
           outputTokens: 0,
           latencyMs: Date.now() - startTime,
         };
       }
 
-      throw new Error(`Local LLM error: ${res.status} - ${errMsg || 'Is LM Studio running?'}`);
+      throw new Error(
+        `Local LLM error: ${res.status} - ${errMsg || 'Is LM Studio running?'}` + (diagText ? ` [${diagText}]` : ''),
+      );
     }
 
     let text, inputTokens, outputTokens;
@@ -1272,6 +1299,66 @@ function isContextOverflowError(status, errorMessage) {
      msg.includes('context window') ||
      msg.includes('model has crashed'))
   );
+}
+
+function getMessageContentText(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === 'string') return part;
+        if (part && typeof part.text === 'string') return part.text;
+        return JSON.stringify(part);
+      })
+      .join('\n');
+  }
+  if (content && typeof content.text === 'string') return content.text;
+  if (content == null) return '';
+  return JSON.stringify(content);
+}
+
+function estimatePromptTokens(charCount) {
+  if (!charCount) return 0;
+  return Math.ceil(charCount / 4);
+}
+
+function getLocalContextDiagnostics({ providerConfig, messages, maxTokens, errorMessage = '' }) {
+  const promptChars = (messages || []).reduce((sum, message) => {
+    const role = message?.role || '';
+    const content = getMessageContentText(message?.content ?? message?.parts ?? '');
+    return sum + role.length + content.length;
+  }, 0);
+  const configuredContextLength = Number.isFinite(Number(providerConfig?.context_length))
+    ? Number(providerConfig.context_length)
+    : null;
+  const requiredPromptTokens = errorMessage?.match(/n_keep\s*\((\d+)\)/i)?.[1];
+  const serverContextLength = errorMessage?.match(/n_ctx\s*\((\d+)\)/i)?.[1];
+
+  return {
+    estimatedPromptTokens: estimatePromptTokens(promptChars),
+    promptChars,
+    configuredContextLength,
+    serverContextLength: serverContextLength != null ? Number(serverContextLength) : null,
+    requiredPromptTokens: requiredPromptTokens != null ? Number(requiredPromptTokens) : null,
+    maxTokens,
+    messageCount: Array.isArray(messages) ? messages.length : 0,
+    roles: Array.isArray(messages) ? messages.map((message) => message?.role || 'unknown').join(',') : '',
+  };
+}
+
+function formatLocalContextDiagnostics(diagnostics) {
+  if (!diagnostics) return '';
+  const parts = [
+    diagnostics.estimatedPromptTokens != null ? `est_prompt_tokens~=${diagnostics.estimatedPromptTokens}` : null,
+    diagnostics.promptChars != null ? `prompt_chars=${diagnostics.promptChars}` : null,
+    diagnostics.requiredPromptTokens != null ? `required_prompt_tokens>=${diagnostics.requiredPromptTokens}` : null,
+    diagnostics.configuredContextLength != null ? `configured_n_ctx=${diagnostics.configuredContextLength}` : null,
+    diagnostics.serverContextLength != null ? `server_n_ctx=${diagnostics.serverContextLength}` : null,
+    diagnostics.maxTokens != null ? `requested_max_tokens=${diagnostics.maxTokens}` : null,
+    diagnostics.messageCount != null ? `messages=${diagnostics.messageCount}` : null,
+    diagnostics.roles ? `roles=${diagnostics.roles}` : null,
+  ];
+  return parts.filter(Boolean).join(', ');
 }
 
 /**

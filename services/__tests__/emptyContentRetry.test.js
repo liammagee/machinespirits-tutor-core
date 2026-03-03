@@ -31,6 +31,21 @@ function makeAgentConfig(overrides = {}) {
   };
 }
 
+function makeLmstudioAgentConfig(overrides = {}) {
+  return {
+    provider: 'lmstudio',
+    providerConfig: {
+      isConfigured: true,
+      apiKey: '',
+      base_url: 'http://127.0.0.1:1234/v1/chat/completions',
+      context_length: 4096,
+    },
+    model: 'qwen3.5-9b',
+    hyperparameters: { temperature: 0.5, max_tokens: 1500 },
+    ...overrides,
+  };
+}
+
 /** Create a mock fetch response for OpenRouter */
 function mockOpenRouterResponse({ content = '', inputTokens = 10, outputTokens = 0, finishReason = 'stop' } = {}) {
   return {
@@ -41,6 +56,14 @@ function mockOpenRouterResponse({ content = '', inputTokens = 10, outputTokens =
       choices: [{ message: { content }, finish_reason: finishReason }],
       usage: { prompt_tokens: inputTokens, completion_tokens: outputTokens },
     }),
+  };
+}
+
+function mockLmstudioErrorResponse({ status = 400, error = 'Context size has been exceeded.' } = {}) {
+  return {
+    ok: false,
+    status,
+    json: async () => ({ error }),
   };
 }
 
@@ -160,5 +183,46 @@ describe('callAI empty-content retry', () => {
   it('exports expected constants', () => {
     expect(EMPTY_CONTENT_MAX_RETRIES).toBe(2);
     expect(EMPTY_CONTENT_RETRY_DELAYS).toEqual([1000, 2000]);
+  });
+
+  it('includes context diagnostics in LM Studio overflow errors', async () => {
+    mockFetch.mockResolvedValue(
+      mockLmstudioErrorResponse({
+        status: 400,
+        error: 'Cannot truncate prompt with n_keep (5556) >= n_ctx (4096)',
+      }),
+    );
+
+    let caughtError = null;
+    try {
+      await callAI(makeLmstudioAgentConfig(), 'system '.repeat(200), 'user '.repeat(4000), 'ego');
+    } catch (error) {
+      caughtError = error;
+    }
+
+    expect(caughtError).toBeTruthy();
+    expect(caughtError.message).toContain('configured_n_ctx=4096');
+    expect(caughtError.message).toContain('server_n_ctx=4096');
+    expect(caughtError.message).toContain('required_prompt_tokens>=5556');
+    expect(caughtError.message).toContain('est_prompt_tokens~=');
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('includes context diagnostics in LM Studio fetch failures', async () => {
+    mockFetch.mockRejectedValueOnce(new TypeError('fetch failed'));
+
+    let caughtError = null;
+    try {
+      await callAI(makeLmstudioAgentConfig(), 'system prompt', 'user prompt', 'ego');
+    } catch (error) {
+      caughtError = error;
+    }
+
+    expect(caughtError).toBeTruthy();
+    expect(caughtError.message).toContain('Local LLM fetch failed');
+    expect(caughtError.message).toContain('configured_n_ctx=4096');
+    expect(caughtError.message).toContain('messages=2');
+    expect(caughtError.message).toContain('roles=system,user');
+    expect(caughtError.message).toContain('est_prompt_tokens~=');
   });
 });
