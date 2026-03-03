@@ -21,6 +21,7 @@ const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, '..');
 const CONFIG_DIR = path.join(ROOT_DIR, 'config');
 const PROMPTS_DIR = path.join(ROOT_DIR, 'prompts');
+const PROMPTS_DIR_OVERRIDE_ENV = 'MACHINESPIRITS_PROMPTS_DIR';
 
 // Shared providers cache (since providers.yaml is used by both loaders)
 let sharedProvidersCache = null;
@@ -255,6 +256,25 @@ export function createPromptLoader(defaultPromptFn = null) {
   // Per-loader prompt cache
   const promptCache = new Map();
 
+  function getPromptSearchDirs() {
+    const dirs = [];
+    const overrideDir = process.env[PROMPTS_DIR_OVERRIDE_ENV];
+    if (overrideDir) dirs.push(path.resolve(overrideDir));
+    dirs.push(PROMPTS_DIR);
+    return [...new Set(dirs)];
+  }
+
+  function resolvePromptPath(filename) {
+    const searchDirs = getPromptSearchDirs();
+    for (const dir of searchDirs) {
+      const candidate = path.join(dir, filename);
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+    return path.join(searchDirs[0], filename);
+  }
+
   /**
    * Load a prompt file with mtime-based caching
    * @param {string} filename - Prompt filename
@@ -262,7 +282,7 @@ export function createPromptLoader(defaultPromptFn = null) {
    * @returns {string} Prompt content
    */
   function loadPrompt(filename, forceReload = false) {
-    const promptPath = path.join(PROMPTS_DIR, filename);
+    const promptPath = resolvePromptPath(filename);
 
     try {
       if (!fs.existsSync(promptPath)) {
@@ -276,7 +296,7 @@ export function createPromptLoader(defaultPromptFn = null) {
       const cached = promptCache.get(filename);
 
       // Return cached if not forced and mtime unchanged
-      if (!forceReload && cached && cached.mtime === stats.mtimeMs) {
+      if (!forceReload && cached && cached.mtime === stats.mtimeMs && cached.path === promptPath) {
         return cached.content;
       }
 
@@ -293,8 +313,8 @@ export function createPromptLoader(defaultPromptFn = null) {
       const contentHash = createHash('sha256').update(rawContent).digest('hex').slice(0, 16);
 
       // Track if this was a change (for hot reload logging)
-      const wasChanged = cached && cached.mtime !== stats.mtimeMs;
-      promptCache.set(filename, { content, mtime: stats.mtimeMs, version, contentHash });
+      const wasChanged = cached && (cached.mtime !== stats.mtimeMs || cached.path !== promptPath);
+      promptCache.set(filename, { content, mtime: stats.mtimeMs, version, contentHash, path: promptPath });
 
       if (wasChanged) {
         console.log(`[Hot Reload] Prompt reloaded: ${filename}`);
@@ -323,17 +343,18 @@ export function createPromptLoader(defaultPromptFn = null) {
    */
   function getPromptCacheStatus() {
     const status = {};
-    for (const [filename, { mtime }] of promptCache.entries()) {
-      const promptPath = path.join(PROMPTS_DIR, filename);
+    for (const [filename, { mtime, path: cachedPath }] of promptCache.entries()) {
+      const promptPath = resolvePromptPath(filename);
       let currentMtime = null;
       let needsReload = false;
       try {
         currentMtime = fs.statSync(promptPath).mtimeMs;
-        needsReload = currentMtime !== mtime;
+        needsReload = currentMtime !== mtime || promptPath !== cachedPath;
       } catch (e) {
         // File may have been deleted
       }
       status[filename] = {
+        path: cachedPath || promptPath,
         cachedMtime: new Date(mtime).toISOString(),
         currentMtime: currentMtime ? new Date(currentMtime).toISOString() : null,
         needsReload,
