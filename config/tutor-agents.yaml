@@ -571,6 +571,62 @@ profiles:
       rapid_nav_window_ms: 30000
       retry_frustration_count: 3
 
+  # Matched-specificity behaviorist control: orthogonal to recognition's intersubjective family.
+  # Grounded in Skinner / Gagné / Keller / Thorndike / Rosenshine — operant conditioning,
+  # Nine Events of Instruction, mastery learning, explicit instruction. Zero recognition AND
+  # zero Hegelian-descendant constructivist content (broader blocklist than matched_pedagogical).
+  # Used by eval repo cell 96 for the A10b density control. Single-agent (no superego, no dialogue).
+  matched_behaviorist:
+    description: "A10b density control - matched-specificity behaviorist prompt, genuinely orthogonal to recognition family, no superego"
+    recognition_mode: false
+    memory_enabled: true
+    dialogue:
+      enabled: false
+      max_rounds: 0
+
+    ego:
+      provider: openrouter
+      model: nemotron
+      staging: front
+      prompt_file: tutor-ego-matched-behaviorist.md
+      hyperparameters:
+        temperature: 0.6
+        max_tokens: 3500
+
+    superego: null
+
+    intervention_thresholds:
+      low_intensity_skip_dialogue: true
+      high_intensity_extra_rounds: false
+
+  # Matched-specificity pedagogical control: rich learning-sciences-grounded prompt
+  # (Piaget/Vygotsky/Bloom/VanLehn/Kapur/Chi/Graesser), length-matched to recognition
+  # at ~2,835 words, zero recognition/Hegelian content (blocklist-verified in source).
+  # Used by eval repo cell 95 for the A10 prompt-density control under v2.2 rubric.
+  # Single-agent (no superego, no dialogue) — matches the eval cell's YAML.
+  matched_pedagogical:
+    description: "A10 density control - matched-specificity pedagogical prompt, no recognition content, no superego"
+    recognition_mode: false
+    memory_enabled: true
+    dialogue:
+      enabled: false
+      max_rounds: 0
+
+    ego:
+      provider: openrouter
+      model: nemotron
+      staging: front
+      prompt_file: tutor-ego-matched-pedagogical.md
+      hyperparameters:
+        temperature: 0.6
+        max_tokens: 3500
+
+    superego: null
+
+    intervention_thresholds:
+      low_intensity_skip_dialogue: true
+      high_intensity_extra_rounds: false
+
   # Memory-only: Base prompts with memory integration, no recognition theory (eval repo cell 19)
   memory:
     description: "Memory isolation - base + memory integration, no recognition theory"
