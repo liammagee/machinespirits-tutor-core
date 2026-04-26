@@ -153,8 +153,21 @@ export function shouldConsolidateToUnconscious(recognitionMoment, options = {}) 
     }
   }
 
-  // Check age
-  const age = Date.now() - new Date(recognitionMoment.created_at).getTime();
+  // Check age. SQLite stores `created_at` as `YYYY-MM-DD HH:MM:SS` with no
+  // timezone marker, but the column is populated by `CURRENT_TIMESTAMP`,
+  // which in SQLite is UTC. JavaScript's Date constructor parses
+  // unmarked strings as *local* time, so on any non-UTC host the parsed
+  // moment ends up offset into the future and `age` goes negative, which
+  // would silently skip consolidation forever. Append 'Z' to force UTC
+  // parsing. The Date constructor accepts ISO-8601 with 'T' or space, and
+  // either Z or offset; appending 'Z' to the existing space-separated
+  // form is well-defined.
+  const createdAtRaw = recognitionMoment.created_at;
+  const createdAt =
+    typeof createdAtRaw === 'string' && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(createdAtRaw)
+      ? new Date(createdAtRaw.replace(' ', 'T') + 'Z')
+      : new Date(createdAtRaw);
+  const age = Date.now() - createdAt.getTime();
   if (age < minAge) {
     return false;
   }
